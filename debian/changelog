@@ -1,3 +1,9 @@
+glibc (2.28-gemian) UNRELEASED; urgency=medium
+
+  * Branching for gemian to avoid use of statx
+
+ -- Adam Boardman <adamboardman@gmail.com>  Mon, 22 Apr 2019 13:05:03 +0100
+
 glibc (2.28-9) UNRELEASED; urgency=medium
 
   [ Aurelien Jarno ]

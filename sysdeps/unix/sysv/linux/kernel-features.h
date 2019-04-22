@@ -115,10 +115,10 @@
 # define __ASSUME_COPY_FILE_RANGE 1
 #endif
 
-/* Support for statx was added in kernel 4.11.  */
-#if __LINUX_KERNEL_VERSION >= 0x040B00
-# define __ASSUME_STATX 1
-#endif
+/* Support for statx was added in kernel 4.11. Gemini builds with newer kernel but still runs on an old one  */
+//#if __LINUX_KERNEL_VERSION >= 0x040B00
+//# define __ASSUME_STATX 1
+//#endif
 
 /* Support for clone call used on fork.  The signature varies across the
    architectures with current 4 different variants:

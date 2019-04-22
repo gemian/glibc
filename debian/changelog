@@ -1,4 +1,4 @@
-glibc (2.28-gemian) UNRELEASED; urgency=medium
+glibc (2.28+gemian) UNRELEASED; urgency=medium
 
   * Branching for gemian to avoid use of statx
 

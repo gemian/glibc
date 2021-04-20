@@ -102,17 +102,19 @@
 # define __ASSUME_RENAMEAT2
 #endif
 
-/* Support for the execveat syscall was added in 3.19.  */
+/* Support for the execveat syscall was added in 3.19. Gemini builds with newer kernel but still runs on an old one */
 #if __LINUX_KERNEL_VERSION >= 0x031300
-# define __ASSUME_EXECVEAT	1
+//# define __ASSUME_EXECVEAT	1
 #endif
 
+/* Gemini builds with newer kernel but still runs on an old one */
 #if __LINUX_KERNEL_VERSION >= 0x040400
-# define __ASSUME_MLOCK2 1
+//# define __ASSUME_MLOCK2 1
 #endif
 
+/* Gemini builds with newer kernel but still runs on an old one */
 #if __LINUX_KERNEL_VERSION >= 0x040500
-# define __ASSUME_COPY_FILE_RANGE 1
+//# define __ASSUME_COPY_FILE_RANGE 1
 #endif
 
 /* Support for statx was added in kernel 4.11. Gemini builds with newer kernel but still runs on an old one  */

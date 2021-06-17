@@ -1,4 +1,4 @@
-/* Copyright (C) 1991-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <unistd.h>
@@ -459,9 +459,6 @@ _hurd_exec_paths (task_t task, file_t file,
   return err;
 }
 libc_hidden_def (_hurd_exec_paths)
-#if SHLIB_COMPAT (libc, GLIBC_2_26, GLIBC_2_27)
-compat_symbol (libc, _hurd_exec_paths, _hurd_exec_paths, GLIBC_2_26);
-#endif
 extern error_t _hurd_exec_file_name (task_t task,
 				     file_t file,
 				     const char *filename,

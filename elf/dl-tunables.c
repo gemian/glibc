@@ -1,7 +1,7 @@
 /* The tunable framework.  See the README.tunables to know how to use the
    tunable in a glibc module.
 
-   Copyright (C) 2016-2018 Free Software Foundation, Inc.
+   Copyright (C) 2016-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -16,7 +16,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <startup.h>
 #include <stdint.h>
@@ -45,12 +45,11 @@ tunables_strdup (const char *in)
   while (in[i++] != '\0');
   char *out = __sbrk (i);
 
-  /* FIXME: In reality if the allocation fails, __sbrk will crash attempting to
-     set the thread-local errno since the TCB has not yet been set up.  This
-     needs to be fixed with an __sbrk implementation that does not set
-     errno.  */
+  /* For most of the tunables code, we ignore user errors.  However,
+     this is a system error - and running out of memory at program
+     startup should be reported, so we do.  */
   if (out == (void *)-1)
-    return NULL;
+    _dl_fatal_printf ("sbrk() failure while processing tunables\n");
 
   i--;
 
@@ -178,6 +177,7 @@ parse_tunables (char *tunestr, char *valstring)
     return;
 
   char *p = tunestr;
+  size_t off = 0;
 
   while (true)
     {
@@ -191,7 +191,11 @@ parse_tunables (char *tunestr, char *valstring)
       /* If we reach the end of the string before getting a valid name-value
 	 pair, bail out.  */
       if (p[len] == '\0')
-	return;
+	{
+	  if (__libc_enable_secure)
+	    tunestr[off] = '\0';
+	  return;
+	}
 
       /* We did not find a valid name-value pair before encountering the
 	 colon.  */
@@ -217,35 +221,28 @@ parse_tunables (char *tunestr, char *valstring)
 
 	  if (tunable_is_name (cur->name, name))
 	    {
-	      /* If we are in a secure context (AT_SECURE) then ignore the tunable
-		 unless it is explicitly marked as secure.  Tunable values take
-		 precendence over their envvar aliases.  */
+	      /* If we are in a secure context (AT_SECURE) then ignore the
+		 tunable unless it is explicitly marked as secure.  Tunable
+		 values take precedence over their envvar aliases.  We write
+		 the tunables that are not SXID_ERASE back to TUNESTR, thus
+		 dropping all SXID_ERASE tunables and any invalid or
+		 unrecognized tunables.  */
 	      if (__libc_enable_secure)
 		{
-		  if (cur->security_level == TUNABLE_SECLEVEL_SXID_ERASE)
+		  if (cur->security_level != TUNABLE_SECLEVEL_SXID_ERASE)
 		    {
-		      if (p[len] == '\0')
-			{
-			  /* Last tunable in the valstring.  Null-terminate and
-			     return.  */
-			  *name = '\0';
-			  return;
-			}
-		      else
-			{
-			  /* Remove the current tunable from the string.  We do
-			     this by overwriting the string starting from NAME
-			     (which is where the current tunable begins) with
-			     the remainder of the string.  We then have P point
-			     to NAME so that we continue in the correct
-			     position in the valstring.  */
-			  char *q = &p[len + 1];
-			  p = name;
-			  while (*q != '\0')
-			    *name++ = *q++;
-			  name[0] = '\0';
-			  len = 0;
-			}
+		      if (off > 0)
+			tunestr[off++] = ':';
+
+		      const char *n = cur->name;
+
+		      while (*n != '\0')
+			tunestr[off++] = *n++;
+
+		      tunestr[off++] = '=';
+
+		      for (size_t j = 0; j < len; j++)
+			tunestr[off++] = value[j];
 		    }
 
 		  if (cur->security_level != TUNABLE_SECLEVEL_NONE)
@@ -258,9 +255,7 @@ parse_tunables (char *tunestr, char *valstring)
 	    }
 	}
 
-      if (p[len] == '\0')
-	return;
-      else
+      if (p[len] != '\0')
 	p += len + 1;
     }
 }
@@ -272,8 +267,7 @@ parse_tunables (char *tunestr, char *valstring)
    for setuid binaries.  We use the special version of access() to avoid
    setting ERRNO, which is a TLS variable since TLS has not yet been set
    up.  */
-static inline void
-__always_inline
+static __always_inline void
 maybe_enable_malloc_check (void)
 {
   tunable_id_t id = TUNABLE_ENUM_NAME (glibc, malloc, check);

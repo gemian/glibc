@@ -29,43 +29,6 @@ GLIBC_2.11 mkostemps64 F
 GLIBC_2.11 mkstemps F
 GLIBC_2.11 mkstemps64 F
 GLIBC_2.13 __fentry__ F
-GLIBC_2.13_DEBIAN_19 _hurd_sigstate_delete F
-GLIBC_2.13_DEBIAN_19 _hurd_sigstate_lock F
-GLIBC_2.13_DEBIAN_19 _hurd_sigstate_pending F
-GLIBC_2.13_DEBIAN_19 _hurd_sigstate_set_global_rcv F
-GLIBC_2.13_DEBIAN_19 _hurd_sigstate_unlock F
-GLIBC_2.13_DEBIAN_31 __pthread_get_cleanup_stack F
-GLIBC_2.13_DEBIAN_31 pthread_attr_destroy F
-GLIBC_2.13_DEBIAN_31 pthread_attr_getdetachstate F
-GLIBC_2.13_DEBIAN_31 pthread_attr_getinheritsched F
-GLIBC_2.13_DEBIAN_31 pthread_attr_getschedparam F
-GLIBC_2.13_DEBIAN_31 pthread_attr_getschedpolicy F
-GLIBC_2.13_DEBIAN_31 pthread_attr_getscope F
-GLIBC_2.13_DEBIAN_31 pthread_attr_init F
-GLIBC_2.13_DEBIAN_31 pthread_attr_setdetachstate F
-GLIBC_2.13_DEBIAN_31 pthread_attr_setinheritsched F
-GLIBC_2.13_DEBIAN_31 pthread_attr_setschedparam F
-GLIBC_2.13_DEBIAN_31 pthread_attr_setschedpolicy F
-GLIBC_2.13_DEBIAN_31 pthread_attr_setscope F
-GLIBC_2.13_DEBIAN_31 pthread_cond_broadcast F
-GLIBC_2.13_DEBIAN_31 pthread_cond_destroy F
-GLIBC_2.13_DEBIAN_31 pthread_cond_init F
-GLIBC_2.13_DEBIAN_31 pthread_cond_signal F
-GLIBC_2.13_DEBIAN_31 pthread_cond_timedwait F
-GLIBC_2.13_DEBIAN_31 pthread_cond_wait F
-GLIBC_2.13_DEBIAN_31 pthread_condattr_destroy F
-GLIBC_2.13_DEBIAN_31 pthread_condattr_init F
-GLIBC_2.13_DEBIAN_31 pthread_equal F
-GLIBC_2.13_DEBIAN_31 pthread_exit F
-GLIBC_2.13_DEBIAN_31 pthread_getschedparam F
-GLIBC_2.13_DEBIAN_31 pthread_mutex_destroy F
-GLIBC_2.13_DEBIAN_31 pthread_mutex_init F
-GLIBC_2.13_DEBIAN_31 pthread_mutex_lock F
-GLIBC_2.13_DEBIAN_31 pthread_mutex_unlock F
-GLIBC_2.13_DEBIAN_31 pthread_self F
-GLIBC_2.13_DEBIAN_31 pthread_setcancelstate F
-GLIBC_2.13_DEBIAN_31 pthread_setcanceltype F
-GLIBC_2.13_DEBIAN_31 pthread_setschedparam F
 GLIBC_2.14 syncfs F
 GLIBC_2.15 __fdelt_chk F
 GLIBC_2.15 __fdelt_warn F
@@ -591,7 +554,6 @@ GLIBC_2.2.6 __xstat64 F
 GLIBC_2.2.6 _authenticate F
 GLIBC_2.2.6 _dl_mcount_wrapper F
 GLIBC_2.2.6 _dl_mcount_wrapper_check F
-GLIBC_2.2.6 _end GLIBC_2.2.6 g ? D .bss 00000000
 GLIBC_2.2.6 _environ D 0x4
 GLIBC_2.2.6 _exit F
 GLIBC_2.2.6 _flushlbf F
@@ -748,6 +710,11 @@ GLIBC_2.2.6 clntudp_bufcreate F
 GLIBC_2.2.6 clntudp_create F
 GLIBC_2.2.6 clntunix_create F
 GLIBC_2.2.6 clock F
+GLIBC_2.2.6 clock_getcpuclockid F
+GLIBC_2.2.6 clock_getres F
+GLIBC_2.2.6 clock_gettime F
+GLIBC_2.2.6 clock_nanosleep F
+GLIBC_2.2.6 clock_settime F
 GLIBC_2.2.6 close F
 GLIBC_2.2.6 closedir F
 GLIBC_2.2.6 closelog F
@@ -1980,11 +1947,6 @@ GLIBC_2.2.6 xprt_unregister F
 GLIBC_2.21 __mach_host_self_ D 0x4
 GLIBC_2.21 __pthread_get_cleanup_stack F
 GLIBC_2.21 _hurd_exec_file_name F
-GLIBC_2.21 _hurd_sigstate_delete F
-GLIBC_2.21 _hurd_sigstate_lock F
-GLIBC_2.21 _hurd_sigstate_pending F
-GLIBC_2.21 _hurd_sigstate_set_global_rcv F
-GLIBC_2.21 _hurd_sigstate_unlock F
 GLIBC_2.21 mach_print F
 GLIBC_2.21 pthread_attr_destroy F
 GLIBC_2.21 pthread_attr_getdetachstate F
@@ -2082,6 +2044,9 @@ GLIBC_2.27 wcstof64x_l F
 GLIBC_2.28 fcntl64 F
 GLIBC_2.28 renameat2 F
 GLIBC_2.28 statx F
+GLIBC_2.29 _hurd_port_move F
+GLIBC_2.29 posix_spawn_file_actions_addchdir_np F
+GLIBC_2.29 posix_spawn_file_actions_addfchdir_np F
 GLIBC_2.3 __ctype_b_loc F
 GLIBC_2.3 __ctype_tolower_loc F
 GLIBC_2.3 __ctype_toupper_loc F
@@ -2216,6 +2181,7 @@ GLIBC_2.3.4 setipv4sourcefilter F
 GLIBC_2.3.4 setsourcefilter F
 GLIBC_2.3.4 xdr_quad_t F
 GLIBC_2.3.4 xdr_u_quad_t F
+GLIBC_2.30 twalk_r F
 GLIBC_2.4 __confstr_chk F
 GLIBC_2.4 __fgets_chk F
 GLIBC_2.4 __fgets_unlocked_chk F

@@ -1,5 +1,5 @@
 /* Lookup helper function for Hurd implementation of *at functions.
-   Copyright (C) 2006-2018 Free Software Foundation, Inc.
+   Copyright (C) 2006-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <hurd.h>
 #include <hurd/lookup.h>
@@ -59,8 +59,8 @@ __file_name_lookup_at (int fd, int at_flags,
   file_t startdir;
   error_t use_init_port (int which, error_t (*operate) (mach_port_t))
     {
-      return (which == INIT_PORT_CWDIR ? (*operate) (startdir) :
-	      _hurd_ports_use (which, operate));
+      return (which == INIT_PORT_CWDIR ? (*operate) (startdir)
+	      : _hurd_ports_use (which, operate));
     }
 
   err = HURD_DPORT_USE (fd, (startdir = port,
@@ -89,8 +89,8 @@ __file_name_split_at (int fd, const char *file_name, char **name)
   file_t startdir;
   error_t use_init_port (int which, error_t (*operate) (mach_port_t))
   {
-    return (which == INIT_PORT_CWDIR ? (*operate) (startdir) :
-	    _hurd_ports_use (which, operate));
+    return (which == INIT_PORT_CWDIR ? (*operate) (startdir)
+	    : _hurd_ports_use (which, operate));
   }
 
   err = HURD_DPORT_USE (fd, (startdir = port,
@@ -114,8 +114,8 @@ __directory_name_split_at (int fd, const char *directory_name, char **name)
   file_t startdir;
   error_t use_init_port (int which, error_t (*operate) (mach_port_t))
     {
-      return (which == INIT_PORT_CWDIR ? (*operate) (startdir) :
-	      _hurd_ports_use (which, operate));
+      return (which == INIT_PORT_CWDIR ? (*operate) (startdir)
+	      : _hurd_ports_use (which, operate));
     }
 
   err = HURD_DPORT_USE (fd, (startdir = port,

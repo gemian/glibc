@@ -1,5 +1,5 @@
 /* x86_64 cache info.
-   Copyright (C) 2003-2018 Free Software Foundation, Inc.
+   Copyright (C) 2003-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #if IS_IN (libc)
 
@@ -205,8 +205,8 @@ intel_check_word (int name, unsigned int value, bool *has_level_2,
 	      /* Intel reused this value.  For family 15, model 6 it
 		 specifies the 3rd level cache.  Otherwise the 2nd
 		 level cache.  */
-	      unsigned int family = cpu_features->family;
-	      unsigned int model = cpu_features->model;
+	      unsigned int family = cpu_features->basic.family;
+	      unsigned int model = cpu_features->basic.model;
 
 	      if (family == 15 && model == 6)
 		{
@@ -258,7 +258,7 @@ intel_check_word (int name, unsigned int value, bool *has_level_2,
 static long int __attribute__ ((noinline))
 handle_intel (int name, const struct cpu_features *cpu_features)
 {
-  unsigned int maxidx = cpu_features->max_cpuid;
+  unsigned int maxidx = cpu_features->basic.max_cpuid;
 
   /* Return -1 for older CPUs.  */
   if (maxidx < 2)
@@ -443,10 +443,10 @@ __cache_sysconf (int name)
 {
   const struct cpu_features *cpu_features = __get_cpu_features ();
 
-  if (cpu_features->kind == arch_kind_intel)
+  if (cpu_features->basic.kind == arch_kind_intel)
     return handle_intel (name, cpu_features);
 
-  if (cpu_features->kind == arch_kind_amd)
+  if (cpu_features->basic.kind == arch_kind_amd)
     return handle_amd (name);
 
   // XXX Fill in more vendors.
@@ -497,9 +497,9 @@ init_cacheinfo (void)
   unsigned int level;
   unsigned int threads = 0;
   const struct cpu_features *cpu_features = __get_cpu_features ();
-  int max_cpuid = cpu_features->max_cpuid;
+  int max_cpuid = cpu_features->basic.max_cpuid;
 
-  if (cpu_features->kind == arch_kind_intel)
+  if (cpu_features->basic.kind == arch_kind_intel)
     {
       data = handle_intel (_SC_LEVEL1_DCACHE_SIZE, cpu_features);
 
@@ -538,8 +538,8 @@ init_cacheinfo (void)
 	     highest cache level.  */
 	  if (max_cpuid >= 4)
 	    {
-	      unsigned int family = cpu_features->family;
-	      unsigned int model = cpu_features->model;
+	      unsigned int family = cpu_features->basic.family;
+	      unsigned int model = cpu_features->basic.model;
 
 	      int i = 0;
 
@@ -700,7 +700,7 @@ intel_bug_no_cache_info:
 	  shared += core;
 	}
     }
-  else if (cpu_features->kind == arch_kind_amd)
+  else if (cpu_features->basic.kind == arch_kind_amd)
     {
       data   = handle_amd (_SC_LEVEL1_DCACHE_SIZE);
       long int core = handle_amd (_SC_LEVEL2_CACHE_SIZE);
@@ -722,7 +722,7 @@ intel_bug_no_cache_info:
 	      threads = 1 << ((ecx >> 12) & 0x0f);
 	    }
 
-	  if (threads == 0)
+	  if (threads == 0 || cpu_features->basic.family >= 0x17)
 	    {
 	      /* If APIC ID width is not available, use logical
 		 processor count.  */
@@ -737,8 +737,22 @@ intel_bug_no_cache_info:
 	  if (threads > 0)
 	    shared /= threads;
 
-	  /* Account for exclusive L2 and L3 caches.  */
-	  shared += core;
+	  /* Get shared cache per ccx for Zen architectures.  */
+	  if (cpu_features->basic.family >= 0x17)
+	    {
+	      unsigned int eax;
+
+	      /* Get number of threads share the L3 cache in CCX.  */
+	      __cpuid_count (0x8000001D, 0x3, eax, ebx, ecx, edx);
+
+	      unsigned int threads_per_ccx = ((eax >> 14) & 0xfff) + 1;
+	      shared *= threads_per_ccx;
+	    }
+	  else
+	    {
+	      /* Account for exclusive L2 and L3 caches.  */
+	      shared += core;
+            }
 	}
 
 #ifndef DISABLE_PREFETCHW
@@ -778,14 +792,20 @@ intel_bug_no_cache_info:
       __x86_shared_cache_size = shared;
     }
 
-  /* The large memcpy micro benchmark in glibc shows that 6 times of
-     shared cache size is the approximate value above which non-temporal
-     store becomes faster on a 8-core processor.  This is the 3/4 of the
-     total shared cache size.  */
+  /* The default setting for the non_temporal threshold is 3/4 of one
+     thread's share of the chip's cache. For most Intel and AMD processors
+     with an initial release date between 2017 and 2020, a thread's typical
+     share of the cache is from 500 KBytes to 2 MBytes. Using the 3/4
+     threshold leaves 125 KBytes to 500 KBytes of the thread's data
+     in cache after a maximum temporal copy, which will maintain
+     in cache a reasonable portion of the thread's stack and other
+     active data. If the threshold is set higher than one thread's
+     share of the cache, it has a substantial risk of negatively
+     impacting the performance of other threads running on the chip. */
   __x86_shared_non_temporal_threshold
     = (cpu_features->non_temporal_threshold != 0
        ? cpu_features->non_temporal_threshold
-       : __x86_shared_cache_size * threads * 3 / 4);
+       : __x86_shared_cache_size * 3 / 4);
 }
 
 #endif

@@ -1,5 +1,5 @@
 /* Implementing POSIX.1 signals under the Hurd.
-   Copyright (C) 1993-2018 Free Software Foundation, Inc.
+   Copyright (C) 1993-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #ifndef	_HURD_SIGNAL_H
 
@@ -37,7 +37,6 @@
 #include <bits/sigaction.h>
 #include <hurd/msg.h>
 
-#include <cthreads.h>		/* For `struct mutex'.  */
 #include <setjmp.h>		/* For `jmp_buf'.  */
 #include <spin-lock.h>
 struct hurd_signal_preemptor;	/* <hurd/sigpreempt.h> */
@@ -122,8 +121,6 @@ struct hurd_sigstate
 
 extern struct hurd_sigstate *_hurd_sigstates;
 
-extern struct mutex _hurd_siglock; /* Locks _hurd_sigstates.  */
-
 /* Get the sigstate of a given thread.  If there was no sigstate for
    the thread, one is created, and the thread gains a reference.  If
    the given thread is MACH_PORT_NULL, return the global sigstate.  */
@@ -196,7 +193,12 @@ extern int _hurd_core_limit;
    A critical section is a section of code which cannot safely be interrupted
    to run a signal handler; for example, code that holds any lock cannot be
    interrupted lest the signal handler try to take the same lock and
-   deadlock result.  */
+   deadlock result.
+
+   As a consequence, a critical section will see its RPCs return EINTR, even if
+   SA_RESTART is set!  In that case, the critical section should be left, so
+   that the handler can run, and the whole critical section be tried again, to
+   avoid unexpectingly exposing EINTR to the application.  */
 
 extern void *_hurd_critical_section_lock (void);
 
@@ -330,7 +332,7 @@ _hurd_setup_sighandler (struct hurd_sigstate *ss, __sighandler_t handler,
 
 /* Function run by the signal thread to receive from the signal port.  */
 
-extern void _hurd_msgport_receive (void);
+extern void *_hurd_msgport_receive (void *arg);
 
 /* Set up STATE with a thread state that, when resumed, is
    like `longjmp (_hurd_sigthread_fault_env, 1)'.  */
@@ -415,8 +417,8 @@ extern mach_msg_timeout_t _hurd_interrupted_rpc_timeout;
 	__mach_port_deallocate (__mach_task_self (), msgport);		      \
 	if ((dealloc_refport) && refport != MACH_PORT_NULL)		      \
 	  __mach_port_deallocate (__mach_task_self (), refport);    	      \
-      } while (__err == MACH_SEND_INVALID_DEST ||			      \
-	       __err == MIG_SERVER_DIED);				      \
+      } while (__err == MACH_SEND_INVALID_DEST				      \
+	       || __err == MIG_SERVER_DIED);				      \
     __err;								      \
 })
 

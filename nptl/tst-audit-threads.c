@@ -1,6 +1,6 @@
 /* Test multi-threading using LD_AUDIT.
 
-   Copyright (C) 2018 Free Software Foundation, Inc.
+   Copyright (C) 2018-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -15,7 +15,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 /* This test uses a dummy LD_AUDIT library (test-audit-threads-mod1) and a
    library with a huge number of functions in order to validate lazy symbol
@@ -25,18 +25,11 @@
    the relocation resolution caching code in the dynamic loader i.e.
    _dl_runtime_profile and _dl_profile_fixup.  */
 
+#include <support/support.h>
 #include <support/xthread.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <sys/sysinfo.h>
-
-static int do_test (void);
-
-/* This test usually takes less than 3s to run.  However, there are cases that
-   take up to 30s.  */
-#define TIMEOUT 60
-#define TEST_FUNCTION do_test ()
-#include "../test-skeleton.c"
 
 /* Declare the functions we are going to call.  */
 #define externnum
@@ -84,7 +77,7 @@ do_test (void)
   /* Used to synchronize all the threads after calling each retNumN.  */
   xpthread_barrier_init (&barrier, NULL, num_threads);
 
-  threads = (pthread_t *) xcalloc (num_threads, sizeof(pthread_t));
+  threads = (pthread_t *) xcalloc (num_threads, sizeof (pthread_t));
   for (i = 0; i < num_threads; i++)
     threads[i] = xpthread_create(NULL, thread_main, NULL);
 
@@ -95,3 +88,8 @@ do_test (void)
 
   return 0;
 }
+
+/* This test usually takes less than 3s to run.  However, there are cases that
+   take up to 30s.  */
+#define TIMEOUT 60
+#include <support/test-driver.c>

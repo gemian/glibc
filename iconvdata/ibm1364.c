@@ -1,5 +1,5 @@
 /* Conversion from and to IBM1364.
-   Copyright (C) 2005-2018 Free Software Foundation, Inc.
+   Copyright (C) 2005-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Masahide Washizawa <washi@jp.ibm.com>, 2005.
 
@@ -15,7 +15,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <dlfcn.h>
 #include <stdint.h>
@@ -158,24 +158,14 @@ enum
 									      \
     if (__builtin_expect (ch, 0) == SO)					      \
       {									      \
-	/* Shift OUT, change to DBCS converter.  */			      \
-	if (curcs == db)						      \
-	  {								      \
-	    result = __GCONV_ILLEGAL_INPUT;				      \
-	    break;							      \
-	  }								      \
+	/* Shift OUT, change to DBCS converter (redundant escape okay).  */   \
 	curcs = db;							      \
 	++inptr;							      \
 	continue;							      \
       }									      \
     if (__builtin_expect (ch, 0) == SI)					      \
       {									      \
-	/* Shift IN, change to SBCS converter.  */			      \
-	if (curcs == sb)						      \
-	  {								      \
-	    result = __GCONV_ILLEGAL_INPUT;				      \
-	    break;							      \
-	  }								      \
+	/* Shift IN, change to SBCS converter (redundant escape okay).  */    \
 	curcs = sb;							      \
 	++inptr;							      \
 	continue;							      \

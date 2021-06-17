@@ -1,5 +1,5 @@
 /* Run time dynamic linker.
-   Copyright (C) 1995-2018 Free Software Foundation, Inc.
+   Copyright (C) 1995-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <dlfcn.h>
@@ -39,12 +39,58 @@
 #include <dl-osinfo.h>
 #include <dl-procinfo.h>
 #include <dl-prop.h>
+#include <dl-vdso.h>
+#include <dl-vdso-setup.h>
 #include <tls.h>
 #include <stap-probe.h>
 #include <stackinfo.h>
 #include <not-cancel.h>
+#include <array_length.h>
 
 #include <assert.h>
+
+/* Only enables rtld profiling for architectures which provides non generic
+   hp-timing support.  The generic support requires either syscall
+   (clock_gettime), which will incur in extra overhead on loading time.
+   Using vDSO is also an option, but it will require extra support on loader
+   to setup the vDSO pointer before its usage.  */
+#if HP_TIMING_INLINE
+# define RLTD_TIMING_DECLARE(var, classifier,...) \
+  classifier hp_timing_t var __VA_ARGS__
+# define RTLD_TIMING_VAR(var)        RLTD_TIMING_DECLARE (var, )
+# define RTLD_TIMING_SET(var, value) (var) = (value)
+# define RTLD_TIMING_REF(var)        &(var)
+
+static inline void
+rtld_timer_start (hp_timing_t *var)
+{
+  HP_TIMING_NOW (*var);
+}
+
+static inline void
+rtld_timer_stop (hp_timing_t *var, hp_timing_t start)
+{
+  hp_timing_t stop;
+  HP_TIMING_NOW (stop);
+  HP_TIMING_DIFF (*var, start, stop);
+}
+
+static inline void
+rtld_timer_accum (hp_timing_t *sum, hp_timing_t start)
+{
+  hp_timing_t stop;
+  rtld_timer_stop (&stop, start);
+  HP_TIMING_ACCUM_NT(*sum, stop);
+}
+#else
+# define RLTD_TIMING_DECLARE(var, classifier...)
+# define RTLD_TIMING_SET(var, value)
+# define RTLD_TIMING_VAR(var)
+# define RTLD_TIMING_REF(var)			 0
+# define rtld_timer_start(var)
+# define rtld_timer_stop(var, start)
+# define rtld_timer_accum(sum, start)
+#endif
 
 /* Avoid PLT use for our local calls at startup.  */
 extern __typeof (__mempcpy) __mempcpy attribute_hidden;
@@ -62,10 +108,55 @@ static void print_missing_version (int errcode, const char *objname,
 				   const char *errsting);
 
 /* Print the various times we collected.  */
-static void print_statistics (hp_timing_t *total_timep);
+static void print_statistics (const hp_timing_t *total_timep);
 
-/* Add audit objects.  */
-static void process_dl_audit (char *str);
+/* Length limits for names and paths, to protect the dynamic linker,
+   particularly when __libc_enable_secure is active.  */
+#ifdef NAME_MAX
+# define SECURE_NAME_LIMIT NAME_MAX
+#else
+# define SECURE_NAME_LIMIT 255
+#endif
+#ifdef PATH_MAX
+# define SECURE_PATH_LIMIT PATH_MAX
+#else
+# define SECURE_PATH_LIMIT 1024
+#endif
+
+/* Strings containing colon-separated lists of audit modules.  */
+struct audit_list
+{
+  /* Array of strings containing colon-separated path lists.  Each
+     audit module needs its own namespace, so pre-allocate the largest
+     possible list.  */
+  const char *audit_strings[DL_NNS];
+
+  /* Number of entries added to audit_strings.  */
+  size_t length;
+
+  /* Index into the audit_strings array (for the iteration phase).  */
+  size_t current_index;
+
+  /* Tail of audit_strings[current_index] which still needs
+     processing.  */
+  const char *current_tail;
+
+  /* Scratch buffer for returning a name which is part of the strings
+     in audit_strings.  */
+  char fname[SECURE_NAME_LIMIT];
+};
+
+/* Creates an empty audit list.  */
+static void audit_list_init (struct audit_list *);
+
+/* Add a string to the end of the audit list, for later parsing.  Must
+   not be called after audit_list_next.  */
+static void audit_list_add_string (struct audit_list *, const char *);
+
+/* Extract the next audit module from the audit list.  Only modules
+   for which dso_name_valid_for_suid is true are returned.  Must be
+   called after all the audit_list_add_string calls.  */
+static const char *audit_list_next (struct audit_list *);
 
 /* This is a list of all the modes the dynamic loader can be in.  */
 enum mode { normal, list, verify, trace };
@@ -73,7 +164,7 @@ enum mode { normal, list, verify, trace };
 /* Process all environments variables the dynamic linker must recognize.
    Since all of them start with `LD_' we are a bit smarter while finding
    all the entries.  */
-static void process_envvars (enum mode *modep);
+static void process_envvars (enum mode *modep, struct audit_list *);
 
 #ifdef DL_ARGV_NOT_RELRO
 int _dl_argc attribute_hidden;
@@ -101,19 +192,6 @@ uintptr_t __pointer_chk_guard_local
 strong_alias (__pointer_chk_guard_local, __pointer_chk_guard)
 #endif
 
-/* Length limits for names and paths, to protect the dynamic linker,
-   particularly when __libc_enable_secure is active.  */
-#ifdef NAME_MAX
-# define SECURE_NAME_LIMIT NAME_MAX
-#else
-# define SECURE_NAME_LIMIT 255
-#endif
-#ifdef PATH_MAX
-# define SECURE_PATH_LIMIT PATH_MAX
-#else
-# define SECURE_PATH_LIMIT 1024
-#endif
-
 /* Check that AT_SECURE=0, or that the passed name does not contain
    directories and is not overly long.  Reject empty names
    unconditionally.  */
@@ -131,89 +209,92 @@ dso_name_valid_for_suid (const char *p)
   return *p != '\0';
 }
 
-/* LD_AUDIT variable contents.  Must be processed before the
-   audit_list below.  */
-const char *audit_list_string;
-
-/* Cyclic list of auditing DSOs.  audit_list->next is the first
-   element.  */
-static struct audit_list
-{
-  const char *name;
-  struct audit_list *next;
-} *audit_list;
-
-/* Iterator for audit_list_string followed by audit_list.  */
-struct audit_list_iter
-{
-  /* Tail of audit_list_string still needing processing, or NULL.  */
-  const char *audit_list_tail;
-
-  /* The list element returned in the previous iteration.  NULL before
-     the first element.  */
-  struct audit_list *previous;
-
-  /* Scratch buffer for returning a name which is part of
-     audit_list_string.  */
-  char fname[SECURE_NAME_LIMIT];
-};
-
-/* Initialize an audit list iterator.  */
 static void
-audit_list_iter_init (struct audit_list_iter *iter)
+audit_list_init (struct audit_list *list)
 {
-  iter->audit_list_tail = audit_list_string;
-  iter->previous = NULL;
+  list->length = 0;
+  list->current_index = 0;
+  list->current_tail = NULL;
 }
 
-/* Iterate through both audit_list_string and audit_list.  */
-static const char *
-audit_list_iter_next (struct audit_list_iter *iter)
+static void
+audit_list_add_string (struct audit_list *list, const char *string)
 {
-  if (iter->audit_list_tail != NULL)
-    {
-      /* First iterate over audit_list_string.  */
-      while (*iter->audit_list_tail != '\0')
-	{
-	  /* Split audit list at colon.  */
-	  size_t len = strcspn (iter->audit_list_tail, ":");
-	  if (len > 0 && len < sizeof (iter->fname))
-	    {
-	      memcpy (iter->fname, iter->audit_list_tail, len);
-	      iter->fname[len] = '\0';
-	    }
-	  else
-	    /* Do not return this name to the caller.  */
-	    iter->fname[0] = '\0';
+  /* Empty strings do not load anything.  */
+  if (*string == '\0')
+    return;
 
-	  /* Skip over the substring and the following delimiter.  */
-	  iter->audit_list_tail += len;
-	  if (*iter->audit_list_tail == ':')
-	    ++iter->audit_list_tail;
+  if (list->length == array_length (list->audit_strings))
+    _dl_fatal_printf ("Fatal glibc error: Too many audit modules requested\n");
 
-	  /* If the name is valid, return it.  */
-	  if (dso_name_valid_for_suid (iter->fname))
-	    return iter->fname;
-	  /* Otherwise, wrap around and try the next name.  */
-	}
-      /* Fall through to the procesing of audit_list.  */
-    }
+  list->audit_strings[list->length++] = string;
 
-  if (iter->previous == NULL)
-    {
-      if (audit_list == NULL)
-	/* No pre-parsed audit list.  */
-	return NULL;
-      /* Start of audit list.  The first list element is at
-	 audit_list->next (cyclic list).  */
-      iter->previous = audit_list->next;
-      return iter->previous->name;
-    }
-  if (iter->previous == audit_list)
-    /* Cyclic list wrap-around.  */
+  /* Initialize processing of the first string for
+     audit_list_next.  */
+  if (list->length == 1)
+    list->current_tail = string;
+}
+
+static const char *
+audit_list_next (struct audit_list *list)
+{
+  if (list->current_tail == NULL)
     return NULL;
-  iter->previous = iter->previous->next;
-  return iter->previous->name;
+
+  while (true)
+    {
+      /* Advance to the next string in audit_strings if the current
+	 string has been exhausted.  */
+      while (*list->current_tail == '\0')
+	{
+	  ++list->current_index;
+	  if (list->current_index == list->length)
+	    {
+	      list->current_tail = NULL;
+	      return NULL;
+	    }
+	  list->current_tail = list->audit_strings[list->current_index];
+	}
+
+      /* Split the in-string audit list at the next colon colon.  */
+      size_t len = strcspn (list->current_tail, ":");
+      if (len > 0 && len < sizeof (list->fname))
+	{
+	  memcpy (list->fname, list->current_tail, len);
+	  list->fname[len] = '\0';
+	}
+      else
+	/* Mark the name as unusable for dso_name_valid_for_suid.  */
+	list->fname[0] = '\0';
+
+      /* Skip over the substring and the following delimiter.  */
+      list->current_tail += len;
+      if (*list->current_tail == ':')
+	++list->current_tail;
+
+      /* If the name is valid, return it.  */
+      if (dso_name_valid_for_suid (list->fname))
+	return list->fname;
+
+      /* Otherwise wrap around to find the next list element. .  */
+    }
+}
+
+/* Count audit modules before they are loaded so GLRO(dl_naudit)
+   is not yet usable.  */
+static size_t
+audit_list_count (struct audit_list *list)
+{
+  /* Restore the audit_list iterator state at the end.  */
+  const char *saved_tail = list->current_tail;
+  size_t naudit = 0;
+
+  assert (list->current_index == 0);
+  while (audit_list_next (list) != NULL)
+    naudit++;
+  list->current_tail = saved_tail;
+  list->current_index = 0;
+  return naudit;
 }
 
 #ifndef HAVE_INLINED_SYSCALLS
@@ -303,11 +384,9 @@ static struct libname_list _dl_rtld_libname;
 static struct libname_list _dl_rtld_libname2;
 
 /* Variable for statistics.  */
-#ifndef HP_TIMING_NONAVAIL
-static hp_timing_t relocate_time;
-static hp_timing_t load_time attribute_relro;
-static hp_timing_t start_time attribute_relro;
-#endif
+RLTD_TIMING_DECLARE (relocate_time, static);
+RLTD_TIMING_DECLARE (load_time,     static, attribute_relro);
+RLTD_TIMING_DECLARE (start_time,    static, attribute_relro);
 
 /* Additional definitions needed by TLS initialization.  */
 #ifdef TLS_INIT_HELPER
@@ -335,9 +414,7 @@ static ElfW(Addr) _dl_start_final (void *arg);
 struct dl_start_final_info
 {
   struct link_map l;
-#if !defined HP_TIMING_NONAVAIL && HP_TIMING_INLINE
-  hp_timing_t start_time;
-#endif
+  RTLD_TIMING_VAR (start_time);
 };
 static ElfW(Addr) _dl_start_final (void *arg,
 				   struct dl_start_final_info *info);
@@ -371,16 +448,11 @@ _dl_start_final (void *arg, struct dl_start_final_info *info)
 {
   ElfW(Addr) start_addr;
 
-  if (HP_SMALL_TIMING_AVAIL)
-    {
-      /* If it hasn't happen yet record the startup time.  */
-      if (! HP_TIMING_INLINE)
-	HP_TIMING_NOW (start_time);
-#if !defined DONT_USE_BOOTSTRAP_MAP && !defined HP_TIMING_NONAVAIL
-      else
-	start_time = info->start_time;
+  /* If it hasn't happen yet record the startup time.  */
+  rtld_timer_start (&start_time);
+#if !defined DONT_USE_BOOTSTRAP_MAP
+  RTLD_TIMING_SET (start_time, info->start_time);
 #endif
-    }
 
   /* Transfer data about ourselves to the permanent link_map structure.  */
 #ifndef DONT_USE_BOOTSTRAP_MAP
@@ -403,8 +475,6 @@ _dl_start_final (void *arg, struct dl_start_final_info *info)
 # endif
 #endif
 
-  HP_TIMING_NOW (GL(dl_cpuclock_offset));
-
   /* Initialize the stack end variable.  */
   __libc_stack_end = __builtin_frame_address (0);
 
@@ -414,27 +484,11 @@ _dl_start_final (void *arg, struct dl_start_final_info *info)
      entry point on the same stack we entered on.  */
   start_addr = _dl_sysdep_start (arg, &dl_main);
 
-#ifndef HP_TIMING_NONAVAIL
-  hp_timing_t rtld_total_time;
-  if (HP_SMALL_TIMING_AVAIL)
-    {
-      hp_timing_t end_time;
-
-      /* Get the current time.  */
-      HP_TIMING_NOW (end_time);
-
-      /* Compute the difference.  */
-      HP_TIMING_DIFF (rtld_total_time, start_time, end_time);
-    }
-#endif
-
   if (__glibc_unlikely (GLRO(dl_debug_mask) & DL_DEBUG_STATISTICS))
     {
-#ifndef HP_TIMING_NONAVAIL
-      print_statistics (&rtld_total_time);
-#else
-      print_statistics (NULL);
-#endif
+      RTLD_TIMING_VAR (rtld_total_time);
+      rtld_timer_stop (&rtld_total_time, start_time);
+      print_statistics (RTLD_TIMING_REF(rtld_total_time));
     }
 
   return start_addr;
@@ -459,11 +513,10 @@ _dl_start (void *arg)
 #define RESOLVE_MAP(sym, version, flags) BOOTSTRAP_MAP
 #include "dynamic-link.h"
 
-  if (HP_TIMING_INLINE && HP_SMALL_TIMING_AVAIL)
 #ifdef DONT_USE_BOOTSTRAP_MAP
-    HP_TIMING_NOW (start_time);
+  rtld_timer_start (&start_time);
 #else
-    HP_TIMING_NOW (info.start_time);
+  rtld_timer_start (&info.start_time);
 #endif
 
   /* Partly clean the `bootstrap_map' structure up.  Don't use
@@ -678,7 +731,7 @@ match_version (const char *string, struct link_map *map)
 static bool tls_init_tp_called;
 
 static void *
-init_tls (void)
+init_tls (size_t naudit)
 {
   /* Number of elements in the static TLS block.  */
   GL(dl_tls_static_nelem) = GL(dl_tls_max_dtv_idx);
@@ -719,6 +772,9 @@ init_tls (void)
 	++i;
       }
   assert (i == GL(dl_tls_max_dtv_idx));
+
+  /* Calculate the size of the static TLS surplus.  */
+  _dl_tls_static_surplus_init (naudit);
 
   /* Compute the TLS offsets for the various blocks.  */
   _dl_determine_tlsoffset ();
@@ -818,7 +874,7 @@ security_init (void)
   _dl_random = NULL;
 }
 
-#include "setup-vdso.h"
+#include <setup-vdso.h>
 
 /* The library search path.  */
 static const char *library_path attribute_relro;
@@ -826,15 +882,18 @@ static const char *library_path attribute_relro;
 static const char *preloadlist attribute_relro;
 /* Nonzero if information about versions has to be printed.  */
 static int version_info attribute_relro;
+/* The preload list passed as a command argument.  */
+static const char *preloadarg attribute_relro;
 
 /* The LD_PRELOAD environment variable gives list of libraries
    separated by white space or colons that are loaded before the
    executable's dependencies and prepended to the global scope list.
    (If the binary is running setuid all elements containing a '/' are
    ignored since it is insecure.)  Return the number of preloads
-   performed.  */
+   performed.   Ditto for --preload command argument.  */
 unsigned int
-handle_ld_preload (const char *preloadlist, struct link_map *main_map)
+handle_preload_list (const char *preloadlist, struct link_map *main_map,
+		     const char *where)
 {
   unsigned int npreloads = 0;
   const char *p = preloadlist;
@@ -858,9 +917,206 @@ handle_ld_preload (const char *preloadlist, struct link_map *main_map)
 	++p;
 
       if (dso_name_valid_for_suid (fname))
-	npreloads += do_preload (fname, main_map, "LD_PRELOAD");
+	npreloads += do_preload (fname, main_map, where);
     }
   return npreloads;
+}
+
+/* Called if the audit DSO cannot be used: if it does not have the
+   appropriate interfaces, or it expects a more recent version library
+   version than what the dynamic linker provides.  */
+static void
+unload_audit_module (struct link_map *map, int original_tls_idx)
+{
+#ifndef NDEBUG
+  Lmid_t ns = map->l_ns;
+#endif
+  _dl_close (map);
+
+  /* Make sure the namespace has been cleared entirely.  */
+  assert (GL(dl_ns)[ns]._ns_loaded == NULL);
+  assert (GL(dl_ns)[ns]._ns_nloaded == 0);
+
+  GL(dl_tls_max_dtv_idx) = original_tls_idx;
+}
+
+/* Called to print an error message if loading of an audit module
+   failed.  */
+static void
+report_audit_module_load_error (const char *name, const char *err_str,
+				bool malloced)
+{
+  _dl_error_printf ("\
+ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
+		    name, err_str);
+  if (malloced)
+    free ((char *) err_str);
+}
+
+/* Load one audit module.  */
+static void
+load_audit_module (const char *name, struct audit_ifaces **last_audit)
+{
+  int original_tls_idx = GL(dl_tls_max_dtv_idx);
+
+  struct dlmopen_args dlmargs;
+  dlmargs.fname = name;
+  dlmargs.map = NULL;
+
+  const char *objname;
+  const char *err_str = NULL;
+  bool malloced;
+  _dl_catch_error (&objname, &err_str, &malloced, dlmopen_doit, &dlmargs);
+  if (__glibc_unlikely (err_str != NULL))
+    {
+      report_audit_module_load_error (name, err_str, malloced);
+      return;
+    }
+
+  struct lookup_args largs;
+  largs.name = "la_version";
+  largs.map = dlmargs.map;
+  _dl_catch_error (&objname, &err_str, &malloced, lookup_doit, &largs);
+  if (__glibc_likely (err_str != NULL))
+    {
+      unload_audit_module (dlmargs.map, original_tls_idx);
+      report_audit_module_load_error (name, err_str, malloced);
+      return;
+    }
+
+  unsigned int (*laversion) (unsigned int) = largs.result;
+
+ /* A null symbol indicates that something is very wrong with the
+    loaded object because defined symbols are supposed to have a
+    valid, non-null address.  */
+  assert (laversion != NULL);
+
+  unsigned int lav = laversion (LAV_CURRENT);
+  if (lav == 0)
+    {
+      /* Only print an error message if debugging because this can
+	 happen deliberately.  */
+      if (GLRO(dl_debug_mask) & DL_DEBUG_FILES)
+	_dl_debug_printf ("\
+file=%s [%lu]; audit interface function la_version returned zero; ignored.\n",
+			  dlmargs.map->l_name, dlmargs.map->l_ns);
+      unload_audit_module (dlmargs.map, original_tls_idx);
+      return;
+    }
+
+  if (lav > LAV_CURRENT)
+    {
+      _dl_debug_printf ("\
+ERROR: audit interface '%s' requires version %d (maximum supported version %d); ignored.\n",
+			name, lav, LAV_CURRENT);
+      unload_audit_module (dlmargs.map, original_tls_idx);
+      return;
+    }
+
+  enum { naudit_ifaces = 8 };
+  union
+  {
+    struct audit_ifaces ifaces;
+    void (*fptr[naudit_ifaces]) (void);
+  } *newp = malloc (sizeof (*newp));
+  if (newp == NULL)
+    _dl_fatal_printf ("Out of memory while loading audit modules\n");
+
+  /* Names of the auditing interfaces.  All in one
+     long string.  */
+  static const char audit_iface_names[] =
+    "la_activity\0"
+    "la_objsearch\0"
+    "la_objopen\0"
+    "la_preinit\0"
+#if __ELF_NATIVE_CLASS == 32
+    "la_symbind32\0"
+#elif __ELF_NATIVE_CLASS == 64
+    "la_symbind64\0"
+#else
+# error "__ELF_NATIVE_CLASS must be defined"
+#endif
+#define STRING(s) __STRING (s)
+    "la_" STRING (ARCH_LA_PLTENTER) "\0"
+    "la_" STRING (ARCH_LA_PLTEXIT) "\0"
+    "la_objclose\0";
+  unsigned int cnt = 0;
+  const char *cp = audit_iface_names;
+  do
+    {
+      largs.name = cp;
+      _dl_catch_error (&objname, &err_str, &malloced, lookup_doit, &largs);
+
+      /* Store the pointer.  */
+      if (err_str == NULL && largs.result != NULL)
+	newp->fptr[cnt] = largs.result;
+      else
+	newp->fptr[cnt] = NULL;
+      ++cnt;
+
+      cp = rawmemchr (cp, '\0') + 1;
+    }
+  while (*cp != '\0');
+  assert (cnt == naudit_ifaces);
+
+  /* Now append the new auditing interface to the list.  */
+  newp->ifaces.next = NULL;
+  if (*last_audit == NULL)
+    *last_audit = GLRO(dl_audit) = &newp->ifaces;
+  else
+    *last_audit = (*last_audit)->next = &newp->ifaces;
+
+  /* The dynamic linker link map is statically allocated, so the
+     cookie in _dl_new_object has not happened.  */
+  link_map_audit_state (&GL (dl_rtld_map), GLRO (dl_naudit))->cookie
+    = (intptr_t) &GL (dl_rtld_map);
+
+  ++GLRO(dl_naudit);
+
+  /* Mark the DSO as being used for auditing.  */
+  dlmargs.map->l_auditing = 1;
+}
+
+/* Notify the the audit modules that the object MAP has already been
+   loaded.  */
+static void
+notify_audit_modules_of_loaded_object (struct link_map *map)
+{
+  struct audit_ifaces *afct = GLRO(dl_audit);
+  for (unsigned int cnt = 0; cnt < GLRO(dl_naudit); ++cnt)
+    {
+      if (afct->objopen != NULL)
+	{
+	  struct auditstate *state = link_map_audit_state (map, cnt);
+	  state->bindflags = afct->objopen (map, LM_ID_BASE, &state->cookie);
+	  map->l_audit_any_plt |= state->bindflags != 0;
+	}
+
+      afct = afct->next;
+    }
+}
+
+/* Load all audit modules.  */
+static void
+load_audit_modules (struct link_map *main_map, struct audit_list *audit_list)
+{
+  struct audit_ifaces *last_audit = NULL;
+
+  while (true)
+    {
+      const char *name = audit_list_next (audit_list);
+      if (name == NULL)
+	break;
+      load_audit_module (name, &last_audit);
+    }
+
+  /* Notify audit modules of the initially loaded modules (the main
+     program and the dynamic linker itself).  */
+  if (GLRO(dl_naudit) > 0)
+    {
+      notify_audit_modules_of_loaded_object (main_map);
+      notify_audit_modules_of_loaded_object (&GL(dl_rtld_map));
+    }
 }
 
 static void
@@ -878,12 +1134,10 @@ dl_main (const ElfW(Phdr) *phdr,
   unsigned int i;
   bool prelinked = false;
   bool rtld_is_main = false;
-#ifndef HP_TIMING_NONAVAIL
-  hp_timing_t start;
-  hp_timing_t stop;
-  hp_timing_t diff;
-#endif
   void *tcbp = NULL;
+
+  struct audit_list audit_list;
+  audit_list_init (&audit_list);
 
   GL(dl_init_static_tls) = &_dl_nothread_init_static_tls;
 
@@ -898,7 +1152,7 @@ dl_main (const ElfW(Phdr) *phdr,
   GL(dl_make_stack_executable_hook) = &_dl_make_stack_executable;
 
   /* Process the environment variable which control the behaviour.  */
-  process_envvars (&mode);
+  process_envvars (&mode, &audit_list);
 
 #ifndef HAVE_INLINED_SYSCALLS
   /* Set up a flag which tells we are just starting.  */
@@ -972,8 +1226,15 @@ dl_main (const ElfW(Phdr) *phdr,
 	  }
 	else if (! strcmp (_dl_argv[1], "--audit") && _dl_argc > 2)
 	  {
-	    process_dl_audit (_dl_argv[2]);
+	    audit_list_add_string (&audit_list, _dl_argv[2]);
 
+	    _dl_skip_args += 2;
+	    _dl_argc -= 2;
+	    _dl_argv += 2;
+	  }
+	else if (! strcmp (_dl_argv[1], "--preload") && _dl_argc > 2)
+	  {
+	    preloadarg = _dl_argv[2];
 	    _dl_skip_args += 2;
 	    _dl_argc -= 2;
 	    _dl_argv += 2;
@@ -1006,7 +1267,8 @@ of this helper program; chances are you did not intend to run this program.\n\
 			variable LD_LIBRARY_PATH\n\
   --inhibit-rpath LIST  ignore RUNPATH and RPATH information in object names\n\
 			in LIST\n\
-  --audit LIST          use objects named in LIST as auditors\n");
+  --audit LIST          use objects named in LIST as auditors\n\
+  --preload LIST        preload objects named in LIST\n");
 
       ++_dl_skip_args;
       --_dl_argc;
@@ -1050,12 +1312,11 @@ of this helper program; chances are you did not intend to run this program.\n\
 	}
       else
 	{
-	  HP_TIMING_NOW (start);
+	  RTLD_TIMING_VAR (start);
+	  rtld_timer_start (&start);
 	  _dl_map_object (NULL, rtld_progname, lt_executable, 0,
 			  __RTLD_OPENEXEC, LM_ID_BASE);
-	  HP_TIMING_NOW (stop);
-
-	  HP_TIMING_DIFF (load_time, start, stop);
+	  rtld_timer_stop (&load_time, start);
 	}
 
       /* Now the map for the main executable is available.  */
@@ -1321,6 +1582,9 @@ ERROR: '%s': cannot process note segment.\n", _dl_argv[0]);
      so they can influence _dl_init_paths.  */
   setup_vdso (main_map, &first_preload);
 
+  /* With vDSO setup we can initialize the function pointers.  */
+  setup_vdso_pointers ();
+
 #ifdef DL_SYSDEP_OSCHECK
   DL_SYSDEP_OSCHECK (_dl_fatal_printf);
 #endif
@@ -1394,16 +1658,13 @@ ERROR: '%s': cannot process note segment.\n", _dl_argv[0]);
 
   /* If we have auditing DSOs to load, do it now.  */
   bool need_security_init = true;
-  if (__glibc_unlikely (audit_list != NULL)
-      || __glibc_unlikely (audit_list_string != NULL))
+  if (audit_list.length > 0)
     {
-      struct audit_ifaces *last_audit = NULL;
-      struct audit_list_iter al_iter;
-      audit_list_iter_init (&al_iter);
+      size_t naudit = audit_list_count (&audit_list);
 
       /* Since we start using the auditing DSOs right away we need to
 	 initialize the data structures now.  */
-      tcbp = init_tls ();
+      tcbp = init_tls (naudit);
 
       /* Initialize security features.  We need to do it this early
 	 since otherwise the constructors of the audit libraries will
@@ -1412,164 +1673,11 @@ ERROR: '%s': cannot process note segment.\n", _dl_argv[0]);
       security_init ();
       need_security_init = false;
 
-      while (true)
-	{
-	  const char *name = audit_list_iter_next (&al_iter);
-	  if (name == NULL)
-	    break;
+      load_audit_modules (main_map, &audit_list);
 
-	  int tls_idx = GL(dl_tls_max_dtv_idx);
-
-	  /* Now it is time to determine the layout of the static TLS
-	     block and allocate it for the initial thread.  Note that we
-	     always allocate the static block, we never defer it even if
-	     no DF_STATIC_TLS bit is set.  The reason is that we know
-	     glibc will use the static model.  */
-	  struct dlmopen_args dlmargs;
-	  dlmargs.fname = name;
-	  dlmargs.map = NULL;
-
-	  const char *objname;
-	  const char *err_str = NULL;
-	  bool malloced;
-	  (void) _dl_catch_error (&objname, &err_str, &malloced, dlmopen_doit,
-				  &dlmargs);
-	  if (__glibc_unlikely (err_str != NULL))
-	    {
-	    not_loaded:
-	      _dl_error_printf ("\
-ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
-				name, err_str);
-	      if (malloced)
-		free ((char *) err_str);
-	    }
-	  else
-	    {
-	      struct lookup_args largs;
-	      largs.name = "la_version";
-	      largs.map = dlmargs.map;
-
-	      /* Check whether the interface version matches.  */
-	      (void) _dl_catch_error (&objname, &err_str, &malloced,
-				      lookup_doit, &largs);
-
-	      unsigned int (*laversion) (unsigned int);
-	      unsigned int lav;
-	      if  (err_str == NULL
-		   && (laversion = largs.result) != NULL
-		   && (lav = laversion (LAV_CURRENT)) > 0
-		   && lav <= LAV_CURRENT)
-		{
-		  /* Allocate structure for the callback function pointers.
-		     This call can never fail.  */
-		  union
-		  {
-		    struct audit_ifaces ifaces;
-#define naudit_ifaces 8
-		    void (*fptr[naudit_ifaces]) (void);
-		  } *newp = malloc (sizeof (*newp));
-
-		  /* Names of the auditing interfaces.  All in one
-		     long string.  */
-		  static const char audit_iface_names[] =
-		    "la_activity\0"
-		    "la_objsearch\0"
-		    "la_objopen\0"
-		    "la_preinit\0"
-#if __ELF_NATIVE_CLASS == 32
-		    "la_symbind32\0"
-#elif __ELF_NATIVE_CLASS == 64
-		    "la_symbind64\0"
-#else
-# error "__ELF_NATIVE_CLASS must be defined"
-#endif
-#define STRING(s) __STRING (s)
-		    "la_" STRING (ARCH_LA_PLTENTER) "\0"
-		    "la_" STRING (ARCH_LA_PLTEXIT) "\0"
-		    "la_objclose\0";
-		  unsigned int cnt = 0;
-		  const char *cp = audit_iface_names;
-		  do
-		    {
-		      largs.name = cp;
-		      (void) _dl_catch_error (&objname, &err_str, &malloced,
-					      lookup_doit, &largs);
-
-		      /* Store the pointer.  */
-		      if (err_str == NULL && largs.result != NULL)
-			{
-			  newp->fptr[cnt] = largs.result;
-
-			  /* The dynamic linker link map is statically
-			     allocated, initialize the data now.   */
-			  GL(dl_rtld_map).l_audit[cnt].cookie
-			    = (intptr_t) &GL(dl_rtld_map);
-			}
-		      else
-			newp->fptr[cnt] = NULL;
-		      ++cnt;
-
-		      cp = (char *) rawmemchr (cp, '\0') + 1;
-		    }
-		  while (*cp != '\0');
-		  assert (cnt == naudit_ifaces);
-
-		  /* Now append the new auditing interface to the list.  */
-		  newp->ifaces.next = NULL;
-		  if (last_audit == NULL)
-		    last_audit = GLRO(dl_audit) = &newp->ifaces;
-		  else
-		    last_audit = last_audit->next = &newp->ifaces;
-		  ++GLRO(dl_naudit);
-
-		  /* Mark the DSO as being used for auditing.  */
-		  dlmargs.map->l_auditing = 1;
-		}
-	      else
-		{
-		  /* We cannot use the DSO, it does not have the
-		     appropriate interfaces or it expects something
-		     more recent.  */
-#ifndef NDEBUG
-		  Lmid_t ns = dlmargs.map->l_ns;
-#endif
-		  _dl_close (dlmargs.map);
-
-		  /* Make sure the namespace has been cleared entirely.  */
-		  assert (GL(dl_ns)[ns]._ns_loaded == NULL);
-		  assert (GL(dl_ns)[ns]._ns_nloaded == 0);
-
-		  GL(dl_tls_max_dtv_idx) = tls_idx;
-		  goto not_loaded;
-		}
-	    }
-	}
-
-      /* If we have any auditing modules, announce that we already
-	 have two objects loaded.  */
-      if (__glibc_unlikely (GLRO(dl_naudit) > 0))
-	{
-	  struct link_map *ls[2] = { main_map, &GL(dl_rtld_map) };
-
-	  for (unsigned int outer = 0; outer < 2; ++outer)
-	    {
-	      struct audit_ifaces *afct = GLRO(dl_audit);
-	      for (unsigned int cnt = 0; cnt < GLRO(dl_naudit); ++cnt)
-		{
-		  if (afct->objopen != NULL)
-		    {
-		      ls[outer]->l_audit[cnt].bindflags
-			= afct->objopen (ls[outer], LM_ID_BASE,
-					 &ls[outer]->l_audit[cnt].cookie);
-
-		      ls[outer]->l_audit_any_plt
-			|= ls[outer]->l_audit[cnt].bindflags != 0;
-		    }
-
-		  afct = afct->next;
-		}
-	    }
-	}
+      /* The count based on audit strings may overestimate the number
+	 of audit modules that got loaded, but not underestimate.  */
+      assert (GLRO(dl_naudit) <= naudit);
     }
 
   /* Keep track of the currently loaded modules to count how many
@@ -1606,7 +1714,8 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
       for (unsigned int cnt = 0; cnt < GLRO(dl_naudit); ++cnt)
 	{
 	  if (afct->activity != NULL)
-	    afct->activity (&main_map->l_audit[cnt].cookie, LA_ACT_ADD);
+	    afct->activity (&link_map_audit_state (main_map, cnt)->cookie,
+			    LA_ACT_ADD);
 
 	  afct = afct->next;
 	}
@@ -1621,11 +1730,18 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 
   if (__glibc_unlikely (preloadlist != NULL))
     {
-      HP_TIMING_NOW (start);
-      npreloads += handle_ld_preload (preloadlist, main_map);
-      HP_TIMING_NOW (stop);
-      HP_TIMING_DIFF (diff, start, stop);
-      HP_TIMING_ACCUM_NT (load_time, diff);
+      RTLD_TIMING_VAR (start);
+      rtld_timer_start (&start);
+      npreloads += handle_preload_list (preloadlist, main_map, "LD_PRELOAD");
+      rtld_timer_accum (&load_time, start);
+    }
+
+  if (__glibc_unlikely (preloadarg != NULL))
+    {
+      RTLD_TIMING_VAR (start);
+      rtld_timer_start (&start);
+      npreloads += handle_preload_list (preloadarg, main_map, "--preload");
+      rtld_timer_accum (&load_time, start);
     }
 
   /* There usually is no ld.so.preload file, it should only be used
@@ -1685,7 +1801,8 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 	      file[file_size - 1] = '\0';
 	    }
 
-	  HP_TIMING_NOW (start);
+	  RTLD_TIMING_VAR (start);
+	  rtld_timer_start (&start);
 
 	  if (file != problem)
 	    {
@@ -1703,9 +1820,7 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 	      npreloads += do_preload (p, main_map, preload_file);
 	    }
 
-	  HP_TIMING_NOW (stop);
-	  HP_TIMING_DIFF (diff, start, stop);
-	  HP_TIMING_ACCUM_NT (load_time, diff);
+	  rtld_timer_accum (&load_time, start);
 
 	  /* We don't need the file anymore.  */
 	  __munmap (file, file_size);
@@ -1729,11 +1844,12 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
   /* Load all the libraries specified by DT_NEEDED entries.  If LD_PRELOAD
      specified some libraries to load, these are inserted before the actual
      dependencies in the executable's searchlist for symbol resolution.  */
-  HP_TIMING_NOW (start);
-  _dl_map_object_deps (main_map, preloads, npreloads, mode == trace, 0);
-  HP_TIMING_NOW (stop);
-  HP_TIMING_DIFF (diff, start, stop);
-  HP_TIMING_ACCUM_NT (load_time, diff);
+  {
+    RTLD_TIMING_VAR (start);
+    rtld_timer_start (&start);
+    _dl_map_object_deps (main_map, preloads, npreloads, mode == trace, 0);
+    rtld_timer_accum (&load_time, start);
+  }
 
   /* Mark all objects as being in the global scope.  */
   for (i = main_map->l_searchlist.r_nlist; i > 0; )
@@ -1805,7 +1921,7 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
      multiple threads (from a non-TLS-using libpthread).  */
   bool was_tls_init_tp_called = tls_init_tp_called;
   if (tcbp == NULL)
-    tcbp = init_tls ();
+    tcbp = init_tls (0);
 
   if (__glibc_likely (need_security_init))
     /* Initialize security features.  But only if we have not done it
@@ -2054,8 +2170,8 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
       liblist = (ElfW(Lib) *)
 		main_map->l_info[ADDRIDX (DT_GNU_LIBLIST)]->d_un.d_ptr;
       liblistend = (ElfW(Lib) *)
-		   ((char *) liblist +
-		    main_map->l_info[VALIDX (DT_GNU_LIBLISTSZ)]->d_un.d_val);
+		   ((char *) liblist
+		    + main_map->l_info[VALIDX (DT_GNU_LIBLISTSZ)]->d_un.d_val);
       r_list = main_map->l_searchlist.r_list;
       r_listend = r_list + main_map->l_searchlist.r_nlist;
 
@@ -2126,12 +2242,10 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
       if (main_map->l_info [ADDRIDX (DT_GNU_CONFLICT)] != NULL)
 	{
 	  ElfW(Rela) *conflict, *conflictend;
-#ifndef HP_TIMING_NONAVAIL
-	  hp_timing_t start;
-	  hp_timing_t stop;
-#endif
 
-	  HP_TIMING_NOW (start);
+	  RTLD_TIMING_VAR (start);
+	  rtld_timer_start (&start);
+
 	  assert (main_map->l_info [VALIDX (DT_GNU_CONFLICTSZ)] != NULL);
 	  conflict = (ElfW(Rela) *)
 	    main_map->l_info [ADDRIDX (DT_GNU_CONFLICT)]->d_un.d_ptr;
@@ -2139,8 +2253,8 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 	    ((char *) conflict
 	     + main_map->l_info [VALIDX (DT_GNU_CONFLICTSZ)]->d_un.d_val);
 	  _dl_resolve_conflicts (main_map, conflict, conflictend);
-	  HP_TIMING_NOW (stop);
-	  HP_TIMING_DIFF (relocate_time, start, stop);
+
+	  rtld_timer_stop (&relocate_time, start);
 	}
 
 
@@ -2153,7 +2267,7 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 
 	  /* Add object to slot information data if necessasy.  */
 	  if (l->l_tls_blocksize != 0 && tls_init_tp_called)
-	    _dl_add_to_slotinfo (l);
+	    _dl_add_to_slotinfo (l, true);
 	}
     }
   else
@@ -2168,15 +2282,12 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 	 know that because it is self-contained).  */
 
       int consider_profiling = GLRO(dl_profile) != NULL;
-#ifndef HP_TIMING_NONAVAIL
-      hp_timing_t start;
-      hp_timing_t stop;
-#endif
 
       /* If we are profiling we also must do lazy reloaction.  */
       GLRO(dl_lazy) |= consider_profiling;
 
-      HP_TIMING_NOW (start);
+      RTLD_TIMING_VAR (start);
+      rtld_timer_start (&start);
       unsigned i = main_map->l_searchlist.r_nlist;
       while (i-- > 0)
 	{
@@ -2201,11 +2312,9 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 
 	  /* Add object to slot information data if necessasy.  */
 	  if (l->l_tls_blocksize != 0 && tls_init_tp_called)
-	    _dl_add_to_slotinfo (l);
+	    _dl_add_to_slotinfo (l, true);
 	}
-      HP_TIMING_NOW (stop);
-
-      HP_TIMING_DIFF (relocate_time, start, stop);
+      rtld_timer_stop (&relocate_time, start);
 
       /* Now enable profiling if needed.  Like the previous call,
 	 this has to go here because the calls it makes should use the
@@ -2248,19 +2357,14 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 	 re-relocation, we might call a user-supplied function
 	 (e.g. calloc from _dl_relocate_object) that uses TLS data.  */
 
-#ifndef HP_TIMING_NONAVAIL
-      hp_timing_t start;
-      hp_timing_t stop;
-      hp_timing_t add;
-#endif
+      RTLD_TIMING_VAR (start);
+      rtld_timer_start (&start);
 
-      HP_TIMING_NOW (start);
       /* Mark the link map as not yet relocated again.  */
       GL(dl_rtld_map).l_relocated = 0;
       _dl_relocate_object (&GL(dl_rtld_map), main_map->l_scope, 0, 0);
-      HP_TIMING_NOW (stop);
-      HP_TIMING_DIFF (add, start, stop);
-      HP_TIMING_ACCUM_NT (relocate_time, add);
+
+      rtld_timer_accum (&relocate_time, start);
     }
 
   /* Do any necessary cleanups for the startup OS interface code.
@@ -2282,7 +2386,8 @@ ERROR: ld.so: object '%s' cannot be loaded as audit interface: %s; ignored.\n",
 	  for (unsigned int cnt = 0; cnt < GLRO(dl_naudit); ++cnt)
 	    {
 	      if (afct->activity != NULL)
-		afct->activity (&head->l_audit[cnt].cookie, LA_ACT_CONSISTENT);
+		afct->activity (&link_map_audit_state (head, cnt)->cookie,
+				LA_ACT_CONSISTENT);
 
 	      afct = afct->next;
 	    }
@@ -2437,30 +2542,6 @@ a filename can be specified using the LD_DEBUG_OUTPUT environment variable.\n");
     }
 }
 
-static void
-process_dl_audit (char *str)
-{
-  /* The parameter is a colon separated list of DSO names.  */
-  char *p;
-
-  while ((p = (strsep) (&str, ":")) != NULL)
-    if (dso_name_valid_for_suid (p))
-      {
-	/* This is using the local malloc, not the system malloc.  The
-	   memory can never be freed.  */
-	struct audit_list *newp = malloc (sizeof (*newp));
-	newp->name = p;
-
-	if (audit_list == NULL)
-	  audit_list = newp->next = newp;
-	else
-	  {
-	    newp->next = audit_list->next;
-	    audit_list = audit_list->next = newp;
-	  }
-      }
-}
-
 /* Process all environments variables the dynamic linker must recognize.
    Since all of them start with `LD_' we are a bit smarter while finding
    all the entries.  */
@@ -2468,7 +2549,7 @@ extern char **_environ attribute_hidden;
 
 
 static void
-process_envvars (enum mode *modep)
+process_envvars (enum mode *modep, struct audit_list *audit_list)
 {
   char **runp = _environ;
   char *envline;
@@ -2508,7 +2589,7 @@ process_envvars (enum mode *modep)
 	      break;
 	    }
 	  if (memcmp (envline, "AUDIT", 5) == 0)
-	    audit_list_string = &envline[6];
+	    audit_list_add_string (audit_list, &envline[6]);
 	  break;
 
 	case 7:
@@ -2692,44 +2773,51 @@ process_envvars (enum mode *modep)
     }
 }
 
+#if HP_TIMING_INLINE
+static void
+print_statistics_item (const char *title, hp_timing_t time,
+		       hp_timing_t total)
+{
+  char cycles[HP_TIMING_PRINT_SIZE];
+  HP_TIMING_PRINT (cycles, sizeof (cycles), time);
+
+  char relative[3 * sizeof (hp_timing_t) + 2];
+  char *cp = _itoa ((1000ULL * time) / total, relative + sizeof (relative),
+		    10, 0);
+  /* Sets the decimal point.  */
+  char *wp = relative;
+  switch (relative + sizeof (relative) - cp)
+    {
+    case 3:
+      *wp++ = *cp++;
+      /* Fall through.  */
+    case 2:
+      *wp++ = *cp++;
+      /* Fall through.  */
+    case 1:
+      *wp++ = '.';
+      *wp++ = *cp++;
+    }
+  *wp = '\0';
+  _dl_debug_printf ("%s: %s cycles (%s%%)\n", title, cycles, relative);
+}
+#endif
 
 /* Print the various times we collected.  */
 static void
 __attribute ((noinline))
-print_statistics (hp_timing_t *rtld_total_timep)
+print_statistics (const hp_timing_t *rtld_total_timep)
 {
-#ifndef HP_TIMING_NONAVAIL
-  char buf[200];
-  char *cp;
-  char *wp;
-
-  /* Total time rtld used.  */
-  if (HP_SMALL_TIMING_AVAIL)
-    {
-      HP_TIMING_PRINT (buf, sizeof (buf), *rtld_total_timep);
-      _dl_debug_printf ("\nruntime linker statistics:\n"
-			"  total startup time in dynamic loader: %s\n", buf);
-
-      /* Print relocation statistics.  */
-      char pbuf[30];
-      HP_TIMING_PRINT (buf, sizeof (buf), relocate_time);
-      cp = _itoa ((1000ULL * relocate_time) / *rtld_total_timep,
-		  pbuf + sizeof (pbuf), 10, 0);
-      wp = pbuf;
-      switch (pbuf + sizeof (pbuf) - cp)
-	{
-	case 3:
-	  *wp++ = *cp++;
-	case 2:
-	  *wp++ = *cp++;
-	case 1:
-	  *wp++ = '.';
-	  *wp++ = *cp++;
-	}
-      *wp = '\0';
-      _dl_debug_printf ("\
-	    time needed for relocation: %s (%s%%)\n", buf, pbuf);
-    }
+#if HP_TIMING_INLINE
+  {
+    char cycles[HP_TIMING_PRINT_SIZE];
+    HP_TIMING_PRINT (cycles, sizeof (cycles), *rtld_total_timep);
+    _dl_debug_printf ("\nruntime linker statistics:\n"
+		      "  total startup time in dynamic loader: %s cycles\n",
+		      cycles);
+    print_statistics_item ("            time needed for relocation",
+			   relocate_time, *rtld_total_timep);
+  }
 #endif
 
   unsigned long int num_relative_relocations = 0;
@@ -2770,29 +2858,8 @@ print_statistics (hp_timing_t *rtld_total_timep)
 		    GL(dl_num_cache_relocations),
 		    num_relative_relocations);
 
-#ifndef HP_TIMING_NONAVAIL
-  /* Time spend while loading the object and the dependencies.  */
-  if (HP_SMALL_TIMING_AVAIL)
-    {
-      char pbuf[30];
-      HP_TIMING_PRINT (buf, sizeof (buf), load_time);
-      cp = _itoa ((1000ULL * load_time) / *rtld_total_timep,
-		  pbuf + sizeof (pbuf), 10, 0);
-      wp = pbuf;
-      switch (pbuf + sizeof (pbuf) - cp)
-	{
-	case 3:
-	  *wp++ = *cp++;
-	case 2:
-	  *wp++ = *cp++;
-	case 1:
-	  *wp++ = '.';
-	  *wp++ = *cp++;
-	}
-      *wp = '\0';
-      _dl_debug_printf ("\
-	   time needed to load objects: %s (%s%%)\n",
-				buf, pbuf);
-    }
+#if HP_TIMING_INLINE
+  print_statistics_item ("           time needed to load objects",
+			 load_time, *rtld_total_timep);
 #endif
 }

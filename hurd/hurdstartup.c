@@ -1,5 +1,5 @@
 /* Initial program startup for running under the GNU Hurd.
-   Copyright (C) 1991-2018 Free Software Foundation, Inc.
+   Copyright (C) 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <stdlib.h>
@@ -41,15 +41,7 @@ extern void __mach_init (void);
    initialization so mig-generated stubs work, and then do an exec_startup
    RPC on our bootstrap port, to which the exec server responds with the
    information passed in the exec call, as well as our original bootstrap
-   port, and the base address and size of the preallocated stack.
-
-   If using cthreads, we are given a new stack by cthreads initialization and
-   deallocate the stack set up by the exec server.  On the new stack we call
-   `start1' (above) to do the rest of the startup work.  Since the stack may
-   disappear out from under us in a machine-dependent way, we use a pile of
-   static variables to communicate the information from exec_startup to start1.
-   This is unfortunate but preferable to machine-dependent frobnication to copy
-   the state from the old stack to the new one.  */
+   port, and the base address and size of the preallocated stack.  */
 
 
 void
@@ -127,9 +119,9 @@ _hurd_startup (void **argptr, void (*main) (intptr_t *data))
 	 pointers and fill them in.  We allocate the space for the
 	 environment pointers immediately after the argv pointers because
 	 the ELF ABI will expect it.  */
-      argcptr = __alloca (sizeof (intptr_t) +
-			  (argc + 1 + envc + 1) * sizeof (char *) +
-			  sizeof (struct hurd_startup_data));
+      argcptr = __alloca (sizeof (intptr_t)
+			  + (argc + 1 + envc + 1) * sizeof (char *)
+			  + sizeof (struct hurd_startup_data));
       *argcptr = argc;
       argv = (void *) (argcptr + 1);
       __argz_extract (args, argslen, argv);

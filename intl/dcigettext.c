@@ -1,5 +1,5 @@
 /* Implementation of the internal dcigettext function.
-   Copyright (C) 1995-2018 Free Software Foundation, Inc.
+   Copyright (C) 1995-2020 Free Software Foundation, Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU Lesser General Public License as published by
@@ -12,7 +12,7 @@
    GNU Lesser General Public License for more details.
 
    You should have received a copy of the GNU Lesser General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+   along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
 
 /* Tell glibc's <string.h> to provide a prototype for mempcpy().
    This must come before <config.h> because <config.h> may include
@@ -360,8 +360,7 @@ static const char *guess_category_value (int category,
 
 #ifdef _LIBC
 # include "../locale/localeinfo.h"
-# define category_to_name(category) \
-  _nl_category_names.str + _nl_category_name_idxs[category]
+# define category_to_name(category) _nl_category_names_get (category)
 #else
 static const char *category_to_name (int category);
 #endif
@@ -1120,11 +1119,19 @@ _nl_find_msg (struct loaded_l10nfile *domain_file,
 		      outcharset = encoding;
 
 # ifdef _LIBC
+
+		      struct gconv_spec conv_spec;
+
+                      __gconv_create_spec (&conv_spec, charset, outcharset);
+
 		      /* We always want to use transliteration.  */
-		      outcharset = norm_add_slashes (outcharset, "TRANSLIT");
-		      charset = norm_add_slashes (charset, "");
-		      int r = __gconv_open (outcharset, charset, &convd->conv,
-					    GCONV_AVOID_NOCONV);
+                      conv_spec.translit = true;
+
+		      int r = __gconv_open (&conv_spec, &convd->conv,
+		                            GCONV_AVOID_NOCONV);
+
+                      __gconv_destroy_spec (&conv_spec);
+
 		      if (__builtin_expect (r != __GCONV_OK, 0))
 			{
 			  /* If the output encoding is the same there is

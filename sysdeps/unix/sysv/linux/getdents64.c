@@ -1,5 +1,5 @@
 /* Get directory entries.  Linux LFS version.
-   Copyright (C) 1997-2018 Free Software Foundation, Inc.
+   Copyright (C) 1997-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,18 +14,25 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library.  If not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <string.h>
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 
-/* The kernel struct linux_dirent64 matches the 'struct getdents64' type.  */
+/* The kernel struct linux_dirent64 matches the 'struct dirent64' type.  */
 ssize_t
-__getdents64 (int fd, char *buf, size_t nbytes)
+__getdents64 (int fd, void *buf, size_t nbytes)
 {
+  /* The system call takes an unsigned int argument, and some length
+     checks in the kernel use an int type.  */
+  if (nbytes > INT_MAX)
+    nbytes = INT_MAX;
   return INLINE_SYSCALL_CALL (getdents64, fd, buf, nbytes);
 }
+libc_hidden_def (__getdents64)
+weak_alias (__getdents64, getdents64)
 
 #if _DIRENT_MATCHES_DIRENT64
 strong_alias (__getdents64, __getdents)

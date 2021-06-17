@@ -1,4 +1,4 @@
-/* Copyright (C) 1993-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1993-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #ifndef	_HURD_H
 
@@ -66,6 +66,7 @@ __hurd_fail (error_t err)
       err = (error_t) ENOMEM;
       break;
 
+    case KERN_INVALID_ADDRESS:
     case KERN_INVALID_ARGUMENT:
       err = (error_t) EINVAL;
       break;
@@ -102,7 +103,6 @@ extern error_t _hurd_ports_use (int which, error_t (*operate) (mach_port_t));
 
 
 /* Base address and size of the initial stack set up by the exec server.
-   If using cthreads, this stack is deallocated in startup.
    Not locked.  */
 
 extern vm_address_t _hurd_stack_base;
@@ -122,9 +122,6 @@ extern int _hurd_orphaned;
 
 /* This variable is incremented every time the process IDs change.  */
 extern unsigned int _hurd_pids_changed_stamp;
-
-/* This condition is broadcast every time the process IDs change.  */
-extern struct condition _hurd_pids_changed_sync;
 
 /* Unix `data break', for brk and sbrk.
    If brk and sbrk are not used, this info will not be initialized or used.  */

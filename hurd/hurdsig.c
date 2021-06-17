@@ -1,4 +1,4 @@
-/* Copyright (C) 1991-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -13,17 +13,18 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <cthreads.h>		/* For `struct mutex'.  */
+#include <lock-intern.h>	/* For `struct mutex'.  */
 #include <pthreadP.h>
 #include <mach.h>
 #include <mach/thread_switch.h>
 #include <mach/mig_support.h>
+#include <mach/vm_param.h>
 
 #include <hurd.h>
 #include <hurd/id.h>
@@ -34,8 +35,6 @@
 #include "../locale/localeinfo.h"
 
 #include <libc-diag.h>
-
-#include <shlib-compat.h>
 
 const char *_hurdsig_getenv (const char *);
 
@@ -87,8 +86,9 @@ _hurd_thread_sigstate (thread_t thread)
       ss = malloc (sizeof (*ss));
       if (ss == NULL)
 	__libc_fatal ("hurd: Can't allocate sigstate\n");
-      ss->thread = thread;
+      __spin_lock_init (&ss->critical_section_lock);
       __spin_lock_init (&ss->lock);
+      ss->thread = thread;
 
       /* Initialize default state.  */
       __sigemptyset (&ss->blocked);
@@ -99,6 +99,9 @@ _hurd_thread_sigstate (thread_t thread)
       ss->suspended = MACH_PORT_NULL;
       ss->intr_port = MACH_PORT_NULL;
       ss->context = NULL;
+      ss->active_resources = NULL;
+      ss->cancel = 0;
+      ss->cancel_hook = NULL;
 
       if (thread == MACH_PORT_NULL)
 	{
@@ -141,7 +144,7 @@ libc_hidden_def (_hurd_thread_sigstate)
 /* Destroy a sigstate structure.  Called by libpthread just before the
  * corresponding thread is terminated.  */
 void
-__hurd_sigstate_delete (thread_t thread)
+_hurd_sigstate_delete (thread_t thread)
 {
   struct hurd_sigstate **ssp, *ss;
 
@@ -163,34 +166,14 @@ __hurd_sigstate_delete (thread_t thread)
       free (ss);
     }
 }
-versioned_symbol (libc, __hurd_sigstate_delete, _hurd_sigstate_delete, GLIBC_2_21);
-#if SHLIB_COMPAT (libc, GLIBC_2_13, GLIBC_2_21)
-void
-__hurd_sigstate_delete_2_13 (thread_t thread)
-{
-  __hurd_sigstate_delete (thread);
-}
-compat_symbol (libc, __hurd_sigstate_delete_2_13, _hurd_sigstate_delete, GLIBC_2_13_DEBIAN_19);
-#endif
-libc_hidden_ver (__hurd_sigstate_delete, _hurd_sigstate_delete)
 
 /* Make SS a global receiver, with pthread signal semantics.  */
 void
-__hurd_sigstate_set_global_rcv (struct hurd_sigstate *ss)
+_hurd_sigstate_set_global_rcv (struct hurd_sigstate *ss)
 {
   assert (ss->thread != MACH_PORT_NULL);
   ss->actions[0].sa_handler = SIG_IGN;
 }
-versioned_symbol (libc, __hurd_sigstate_set_global_rcv, _hurd_sigstate_set_global_rcv, GLIBC_2_21);
-#if SHLIB_COMPAT (libc, GLIBC_2_13, GLIBC_2_21)
-void
-__hurd_sigstate_set_global_rcv_2_13 (struct hurd_sigstate *ss)
-{
-  __hurd_sigstate_set_global_rcv (ss);
-}
-compat_symbol (libc, __hurd_sigstate_set_global_rcv_2_13, _hurd_sigstate_set_global_rcv, GLIBC_2_13_DEBIAN_19);
-#endif
-libc_hidden_ver (__hurd_sigstate_set_global_rcv, _hurd_sigstate_set_global_rcv)
 
 /* Check whether SS is a global receiver.  */
 static int
@@ -199,63 +182,36 @@ sigstate_is_global_rcv (const struct hurd_sigstate *ss)
   return (_hurd_global_sigstate != NULL)
 	 && (ss->actions[0].sa_handler == SIG_IGN);
 }
+libc_hidden_def (_hurd_sigstate_delete)
 
 /* Lock/unlock a hurd_sigstate structure.  If the accessors below require
    it, the global sigstate will be locked as well.  */
 void
-__hurd_sigstate_lock (struct hurd_sigstate *ss)
+_hurd_sigstate_lock (struct hurd_sigstate *ss)
 {
   if (sigstate_is_global_rcv (ss))
     __spin_lock (&_hurd_global_sigstate->lock);
   __spin_lock (&ss->lock);
 }
 void
-__hurd_sigstate_unlock (struct hurd_sigstate *ss)
+_hurd_sigstate_unlock (struct hurd_sigstate *ss)
 {
   __spin_unlock (&ss->lock);
   if (sigstate_is_global_rcv (ss))
     __spin_unlock (&_hurd_global_sigstate->lock);
 }
-versioned_symbol (libc, __hurd_sigstate_lock, _hurd_sigstate_lock, GLIBC_2_21);
-libc_hidden_ver (__hurd_sigstate_lock, _hurd_sigstate_lock)
-versioned_symbol (libc, __hurd_sigstate_unlock, _hurd_sigstate_unlock, GLIBC_2_21);
-libc_hidden_ver (__hurd_sigstate_unlock, _hurd_sigstate_unlock)
-
-#if SHLIB_COMPAT (libc, GLIBC_2_13, GLIBC_2_21)
-void
-__hurd_sigstate_lock_2_13 (struct hurd_sigstate *ss)
-{
-  __hurd_sigstate_lock (ss);
-}
-void
-__hurd_sigstate_unlock_2_13 (struct hurd_sigstate *ss)
-{
-  __hurd_sigstate_unlock (ss);
-}
-compat_symbol (libc, __hurd_sigstate_lock_2_13, _hurd_sigstate_lock, GLIBC_2_13_DEBIAN_19);
-compat_symbol (libc, __hurd_sigstate_unlock_2_13, _hurd_sigstate_unlock, GLIBC_2_13_DEBIAN_19);
-#endif
+libc_hidden_def (_hurd_sigstate_set_global_rcv)
 
 /* Retreive a thread's full set of pending signals, including the global
    ones if appropriate.  SS must be locked.  */
 sigset_t
-__hurd_sigstate_pending (const struct hurd_sigstate *ss)
+_hurd_sigstate_pending (const struct hurd_sigstate *ss)
 {
   sigset_t pending = ss->pending;
   if (sigstate_is_global_rcv (ss))
     __sigorset (&pending, &pending, &_hurd_global_sigstate->pending);
   return pending;
 }
-versioned_symbol (libc, __hurd_sigstate_pending, _hurd_sigstate_pending, GLIBC_2_21);
-#if SHLIB_COMPAT (libc, GLIBC_2_13, GLIBC_2_21)
-sigset_t
-__hurd_sigstate_pending_2_13 (const struct hurd_sigstate *ss)
-{
-  return __hurd_sigstate_pending (ss);
-}
-compat_symbol (libc, __hurd_sigstate_pending_2_13, _hurd_sigstate_pending, GLIBC_2_13_DEBIAN_19);
-#endif
-libc_hidden_ver (__hurd_sigstate_pending, _hurd_sigstate_pending)
 
 /* Clear a pending signal and return the associated detailed
    signal information. SS must be locked, and must have signal SIGNO
@@ -274,6 +230,8 @@ sigstate_clear_pending (struct hurd_sigstate *ss, int signo)
   __sigdelset (&ss->pending, signo);
   return ss->pending_data[signo];
 }
+libc_hidden_def (_hurd_sigstate_lock)
+libc_hidden_def (_hurd_sigstate_unlock)
 
 /* Retreive a thread's action vector.  SS must be locked.  */
 struct sigaction *
@@ -284,6 +242,7 @@ _hurd_sigstate_actions (struct hurd_sigstate *ss)
   else
     return ss->actions;
 }
+libc_hidden_def (_hurd_sigstate_pending)
 
 
 /* Signal delivery itself is on this page.  */
@@ -471,8 +430,8 @@ _hurdsig_abort_rpcs (struct hurd_sigstate *ss, int signo, int sigthread,
      receive completes immediately or aborts.  */
   abort_thread (ss, state, reply);
 
-  if (state->basic.PC >= (natural_t) &_hurd_intr_rpc_msg_about_to &&
-      state->basic.PC <  (natural_t) &_hurd_intr_rpc_msg_in_trap)
+  if (state->basic.PC >= (natural_t) &_hurd_intr_rpc_msg_about_to
+      && state->basic.PC < (natural_t) &_hurd_intr_rpc_msg_in_trap)
     {
       /* The thread is about to do the RPC, but hasn't yet entered
 	 mach_msg.  Mutate the thread's state so it knows not to try
@@ -483,11 +442,11 @@ _hurdsig_abort_rpcs (struct hurd_sigstate *ss, int signo, int sigthread,
       state->basic.SYSRETURN = MACH_SEND_INTERRUPTED;
       *state_change = 1;
     }
-  else if (state->basic.PC == (natural_t) &_hurd_intr_rpc_msg_in_trap &&
+  else if (state->basic.PC == (natural_t) &_hurd_intr_rpc_msg_in_trap
 	   /* The thread was blocked in the system call.  After thread_abort,
 	      the return value register indicates what state the RPC was in
 	      when interrupted.  */
-	   state->basic.SYSRETURN == MACH_RCV_INTERRUPTED)
+	   && state->basic.SYSRETURN == MACH_RCV_INTERRUPTED)
       {
 	/* The RPC request message was sent and the thread was waiting for
 	   the reply message; now the message receive has been aborted, so
@@ -617,8 +576,8 @@ abort_all_rpcs (int signo, struct machine_thread_all_state *state, int live)
       }
 }
 
-/* Wake up any sigsuspend call that is blocking SS->thread.  SS must be
-   locked.  */
+/* Wake up any sigsuspend or pselect call that is blocking SS->thread.  SS must
+   be locked.  */
 static void
 wake_sigsuspend (struct hurd_sigstate *ss)
 {
@@ -648,8 +607,8 @@ sigset_t _hurdsig_preempted_set;
 weak_alias (_hurdsig_preemptors, _hurdsig_preempters)
 
 /* Mask of stop signals.  */
-#define STOPSIGS (sigmask (SIGTTIN) | sigmask (SIGTTOU) | \
-		  sigmask (SIGSTOP) | sigmask (SIGTSTP))
+#define STOPSIGS (sigmask (SIGTTIN) | sigmask (SIGTTOU) \
+		  | sigmask (SIGSTOP) | sigmask (SIGTSTP))
 
 /* Actual delivery of a single signal.  Called with SS unlocked.  When
    the signal is delivered, return SS, locked (or, if SS was originally
@@ -921,9 +880,9 @@ post_signal (struct hurd_sigstate *ss,
 	}
     }
 
-  if (_hurd_orphaned && act == stop &&
-      (__sigmask (signo) & (__sigmask (SIGTTIN) | __sigmask (SIGTTOU) |
-			    __sigmask (SIGTSTP))))
+  if (_hurd_orphaned && act == stop
+      && (__sigmask (signo) & (__sigmask (SIGTTIN) | __sigmask (SIGTTOU)
+			       | __sigmask (SIGTSTP))))
     {
       /* If we would ordinarily stop for a job control signal, but we are
 	 orphaned so noone would ever notice and continue us again, we just
@@ -1431,7 +1390,7 @@ _S_msg_sig_post (mach_port_t me,
   if (err = signal_allowed (signo, refport))
     return err;
 
-  d.code = sigcode;
+  d.code = d.exc_subcode = sigcode;
   d.exc = 0;
 
   /* Post the signal to a global receiver thread (or mark it pending in
@@ -1460,7 +1419,7 @@ _S_msg_sig_post_untraced (mach_port_t me,
   if (err = signal_allowed (signo, refport))
     return err;
 
-  d.code = sigcode;
+  d.code = d.exc_subcode = sigcode;
   d.exc = 0;
 
   /* Post the signal to the designated signal-receiving thread.  This will
@@ -1530,8 +1489,8 @@ _hurdsig_init (const int *intarray, size_t intarraysize)
 
   /* Start the signal thread listening on the message port.  */
 
-#pragma weak __cthread_fork
-  if (!__cthread_fork)
+#pragma weak __pthread_create
+  if (!__pthread_create)
     {
       err = __thread_create (__mach_task_self (), &_hurd_msgport_thread);
       assert_perror (err);
@@ -1556,41 +1515,40 @@ _hurdsig_init (const int *intarray, size_t intarraysize)
     }
   else
     {
-      /* When cthreads is being used, we need to make the signal thread a
-         proper cthread.  Otherwise it cannot use mutex_lock et al, which
-         will be the cthreads versions.  Various of the message port RPC
+      pthread_t thread;
+      pthread_attr_t attr;
+      void *addr;
+      size_t size;
+
+      /* When pthread is being used, we need to make the signal thread a
+         proper pthread.  Otherwise it cannot use mutex_lock et al, which
+         will be the pthread versions.  Various of the message port RPC
          handlers need to take locks, so we need to be able to call into
-         cthreads code and meet its assumptions about how our thread and
-         its stack are arranged.  Since cthreads puts it there anyway,
+         pthread code and meet its assumptions about how our thread and
+         its stack are arranged.  Since pthread puts it there anyway,
          we'll let the signal thread's per-thread variables be found as for
-         any normal cthread, and just leave the magic __hurd_sigthread_*
+         any normal pthread, and just leave the magic __hurd_sigthread_*
          values all zero so they'll be ignored.  */
-#pragma weak __cthread_detach
+
+#pragma weak __pthread_detach
 #pragma weak __pthread_getattr_np
 #pragma weak __pthread_attr_getstack
-      __cthread_t thread = __cthread_fork (
-			     (cthread_fn_t) &_hurd_msgport_receive, 0);
-      __cthread_detach (thread);
+      __pthread_create(&thread, NULL, &_hurd_msgport_receive, NULL);
 
-      if (__pthread_getattr_np)
-	{
-	  /* Record signal thread stack layout for fork() */
-	  pthread_attr_t attr;
-	  void *addr;
-	  size_t size;
+      /* Record signal thread stack layout for fork() */
+      __pthread_getattr_np (thread, &attr);
+      __pthread_attr_getstack (&attr, &addr, &size);
+      __hurd_sigthread_stack_base = (uintptr_t) addr;
+      __hurd_sigthread_stack_end = __hurd_sigthread_stack_base + size;
 
-	  __pthread_getattr_np ((pthread_t) thread, &attr);
-	  __pthread_attr_getstack (&attr, &addr, &size);
-	  __hurd_sigthread_stack_base = (uintptr_t) addr;
-	  __hurd_sigthread_stack_end = __hurd_sigthread_stack_base + size;
-	}
+      __pthread_detach(thread);
 
       /* XXX We need the thread port for the signal thread further on
          in this thread (see hurdfault.c:_hurdsigfault_init).
          Therefore we block until _hurd_msgport_thread is initialized
          by the newly created thread.  This really shouldn't be
          necessary; we should be able to fetch the thread port for a
-         cthread from here.  */
+         pthread from here.  */
       while (_hurd_msgport_thread == 0)
 	__swtch_pri (0);
     }
@@ -1627,10 +1585,10 @@ reauth_proc (mach_port_t new)
   ref = __mach_reply_port ();
   if (! HURD_PORT_USE (&_hurd_ports[INIT_PORT_PROC],
 		       __proc_reauthenticate (port, ref,
-					      MACH_MSG_TYPE_MAKE_SEND) ||
-		       __auth_user_authenticate (new, ref,
-						 MACH_MSG_TYPE_MAKE_SEND,
-						 &ignore))
+					      MACH_MSG_TYPE_MAKE_SEND)
+		       || __auth_user_authenticate (new, ref,
+						    MACH_MSG_TYPE_MAKE_SEND,
+						    &ignore))
       && ignore != MACH_PORT_NULL)
     __mach_port_deallocate (__mach_task_self (), ignore);
   __mach_port_destroy (__mach_task_self (), ref);

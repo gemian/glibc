@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2018 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Ulrich Drepper <drepper@redhat.com>, 2002.
 
@@ -14,9 +14,10 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <semaphore.h>
+#include <futex-internal.h>
 #include "pthreadP.h"
 
 #define SEM_SHM_PREFIX  "sem."
@@ -42,6 +43,20 @@ extern int __sem_mappings_lock attribute_hidden;
 /* Comparison function for search in tree with existing mappings.  */
 extern int __sem_search (const void *a, const void *b) attribute_hidden;
 
+static inline void __new_sem_open_init (struct new_sem *sem, unsigned value)
+{
+#if __HAVE_64B_ATOMICS
+  sem->data = value;
+#else
+  sem->value = value << SEM_VALUE_SHIFT;
+  sem->nwaiters = 0;
+#endif
+  /* pad is used as a mutex on pre-v9 sparc and ignored otherwise.  */
+  sem->pad = 0;
+
+  /* This always is a shared semaphore.  */
+  sem->private = FUTEX_SHARED;
+}
 
 /* Prototypes of functions with multiple interfaces.  */
 extern int __new_sem_init (sem_t *sem, int pshared, unsigned int value);

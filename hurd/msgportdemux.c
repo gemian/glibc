@@ -1,5 +1,5 @@
 /* Demux messages sent on the signal port.
-   Copyright (C) 1991-2018 Free Software Foundation, Inc.
+   Copyright (C) 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <hurd.h>
 #include <hurd/signal.h>
@@ -46,19 +46,19 @@ msgport_server (mach_msg_header_t *inp,
     if ((*d->demux) (inp, outp))
       return 1;
 
-  return (_S_exc_server (inp, outp) ||
-	  _S_msg_server (inp, outp));
+  return (_S_exc_server (inp, outp)
+	  || _S_msg_server (inp, outp));
 }
 
 /* This is the code that the signal thread runs.  */
-void
-_hurd_msgport_receive (void)
+void *
+_hurd_msgport_receive (void *arg)
 {
   /* Get our own sigstate cached so we never again have to take a lock to
      fetch it.  There is much code in hurdsig.c that operates with some
      sigstate lock held, which will deadlock with _hurd_thread_sigstate.
 
-     Furthermore, in the cthreads case this is the convenient spot
+     Furthermore, in the pthread case this is the convenient spot
      to initialize _hurd_msgport_thread (see hurdsig.c:_hurdsig_init).  */
 
   _hurd_msgport_thread = _hurd_self_sigstate ()->thread;

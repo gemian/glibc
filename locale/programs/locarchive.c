@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2018 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Ulrich Drepper <drepper@redhat.com>, 2002.
 
@@ -13,7 +13,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, see <http://www.gnu.org/licenses/>.  */
+   along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
 #ifdef HAVE_CONFIG_H
 # include <config.h>
@@ -453,16 +453,7 @@ enlarge_archive (struct locarhandle *ah, const struct locarhead *head)
     }
 
   /* Lock the new file.  */
-#ifdef __GNU__
-  struct flock fl;
-  fl.l_whence = SEEK_SET;
-  fl.l_start = 0;
-  fl.l_len = 0;
-  fl.l_type = F_WRLCK;
-  if (fcntl(fd, F_SETLKW, &fl) != 0)
-#else
   if (lockf64 (fd, F_LOCK, total) != 0)
-#endif
     {
       int errval = errno;
       unlink (fname);
@@ -622,16 +613,7 @@ open_archive (struct locarhandle *ah, bool readonly)
 	error (EXIT_FAILURE, errno, _("cannot stat locale archive \"%s\""),
 	       archivefname);
 
-#ifdef __GNU__
-      struct flock fl;
-      fl.l_whence = SEEK_SET;
-      fl.l_start = 0;
-      fl.l_len = 0;
-      fl.l_type = F_WRLCK;
-      if (!readonly && fcntl(fd, F_SETLKW, &fl) == -1)
-#else
       if (!readonly && lockf64 (fd, F_LOCK, sizeof (struct locarhead)) == -1)
-#endif
 	{
 	  close (fd);
 

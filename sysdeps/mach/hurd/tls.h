@@ -1,5 +1,5 @@
 /* Definitions for thread-local data handling.  Hurd version.
-   Copyright (C) 2003-2018 Free Software Foundation, Inc.
+   Copyright (C) 2003-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #ifndef _TLS_H
 #define _TLS_H
@@ -25,6 +25,7 @@
 # include <stdint.h>
 # include <stdbool.h>
 # include <sysdep.h>
+# include <sys/param.h>
 # include <mach/mig_errors.h>
 # include <mach.h>
 # include <atomic.h>
@@ -34,7 +35,7 @@
 # define TLS_INIT_TCB_SIZE sizeof (tcbhead_t)
 
 /* Alignment requirements for the initial TCB.  */
-# define TLS_INIT_TCB_ALIGN __alignof__ (tcbhead_t)
+# define TLS_INIT_TCB_ALIGN MAX(__alignof__ (tcbhead_t), 8)
 
 /* This is the size of the TCB.  */
 # define TLS_TCB_SIZE TLS_INIT_TCB_SIZE	/* XXX */
@@ -60,7 +61,7 @@
 #define THREAD_GSCOPE_RESET_FLAG() \
   do 									      \
     if (atomic_exchange_and_add_rel (&GL(dl_thread_gscope_count), -1) == 1)   \
-      lll_wake (&GL(dl_thread_gscope_count), 0);			      \
+      lll_wake (GL(dl_thread_gscope_count), 0);				      \
   while (0)
 #define THREAD_GSCOPE_WAIT() \
   do 									      \
@@ -68,7 +69,7 @@
       int count;							      \
       atomic_write_barrier ();						      \
       while ((count = GL(dl_thread_gscope_count)))			      \
-        lll_wait (&GL(dl_thread_gscope_count), count, 0);		      \
+        lll_wait (GL(dl_thread_gscope_count), count, 0);		      \
     }									      \
   while (0)
 

@@ -1,5 +1,5 @@
 /* Malloc implementation for multiple threads without lock contention.
-   Copyright (C) 1996-2018 Free Software Foundation, Inc.
+   Copyright (C) 1996-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Wolfram Gloger <wg@malloc.de>
    and Doug Lea <dl@cs.oswego.edu>, 2001.
@@ -16,7 +16,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; see the file COPYING.LIB.  If
-   not, see <http://www.gnu.org/licenses/>.  */
+   not, see <https://www.gnu.org/licenses/>.  */
 
 /*
   This is a version (aka ptmalloc2) of malloc/free/realloc written by
@@ -321,6 +321,10 @@ __malloc_assert (const char *assertion, const char *file, unsigned int line,
 /* This is another arbitrary limit, which tunables can change.  Each
    tcache bin will hold at most this number of chunks.  */
 # define TCACHE_FILL_COUNT 7
+
+/* Maximum chunks in tcache bins for tunables.  This value must fit the range
+   of tcache->counts[] entries, else they may overflow.  */
+# define MAX_TCACHE_COUNT UINT16_MAX
 #endif
 
 
@@ -1187,17 +1191,6 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   ((uintptr_t)(MALLOC_ALIGNMENT == 2 * SIZE_SZ ? (p) : chunk2mem (p)) \
    & MALLOC_ALIGN_MASK)
 
-
-/*
-   Check if a request is so large that it would wrap around zero when
-   padded and aligned. To simplify some other code, the bound is made
-   low enough so that adding MINSIZE will also not wrap around zero.
- */
-
-#define REQUEST_OUT_OF_RANGE(req)                                 \
-  ((unsigned long) (req) >=						      \
-   (unsigned long) (INTERNAL_SIZE_T) (-2 * MINSIZE))
-
 /* pad request bytes into a usable size -- internal version */
 
 #define request2size(req)                                         \
@@ -1205,21 +1198,18 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
    MINSIZE :                                                      \
    ((req) + SIZE_SZ + MALLOC_ALIGN_MASK) & ~MALLOC_ALIGN_MASK)
 
-/* Same, except also perform an argument and result check.  First, we check
-   that the padding done by request2size didn't result in an integer
-   overflow.  Then we check (using REQUEST_OUT_OF_RANGE) that the resulting
-   size isn't so large that a later alignment would lead to another integer
-   overflow.  */
-#define checked_request2size(req, sz) \
-({				    \
-  (sz) = request2size (req);	    \
-  if (((sz) < (req))		    \
-      || REQUEST_OUT_OF_RANGE (sz)) \
-    {				    \
-      __set_errno (ENOMEM);	    \
-      return 0;			    \
-    }				    \
-})
+/* Check if REQ overflows when padded and aligned and if the resulting value
+   is less than PTRDIFF_T.  Returns TRUE and the requested size or MINSIZE in
+   case the value is less than MINSIZE on SZ or false if any of the previous
+   check fail.  */
+static inline bool
+checked_request2size (size_t req, size_t *sz) __nonnull (1)
+{
+  if (__glibc_unlikely (req > PTRDIFF_MAX))
+    return false;
+  *sz = request2size (req);
+  return true;
+}
 
 /*
    --------------- Physical chunk operations ---------------
@@ -1384,39 +1374,6 @@ typedef struct malloc_chunk *mbinptr;
 #define first(b)     ((b)->fd)
 #define last(b)      ((b)->bk)
 
-/* Take a chunk off a bin list */
-#define unlink(AV, P, BK, FD) {                                            \
-    if (__builtin_expect (chunksize(P) != prev_size (next_chunk(P)), 0))      \
-      malloc_printerr ("corrupted size vs. prev_size");			      \
-    FD = P->fd;								      \
-    BK = P->bk;								      \
-    if (__builtin_expect (FD->bk != P || BK->fd != P, 0))		      \
-      malloc_printerr ("corrupted double-linked list");			      \
-    else {								      \
-        FD->bk = BK;							      \
-        BK->fd = FD;							      \
-        if (!in_smallbin_range (chunksize_nomask (P))			      \
-            && __builtin_expect (P->fd_nextsize != NULL, 0)) {		      \
-	    if (__builtin_expect (P->fd_nextsize->bk_nextsize != P, 0)	      \
-		|| __builtin_expect (P->bk_nextsize->fd_nextsize != P, 0))    \
-	      malloc_printerr ("corrupted double-linked list (not small)");   \
-            if (FD->fd_nextsize == NULL) {				      \
-                if (P->fd_nextsize == P)				      \
-                  FD->fd_nextsize = FD->bk_nextsize = FD;		      \
-                else {							      \
-                    FD->fd_nextsize = P->fd_nextsize;			      \
-                    FD->bk_nextsize = P->bk_nextsize;			      \
-                    P->fd_nextsize->bk_nextsize = FD;			      \
-                    P->bk_nextsize->fd_nextsize = FD;			      \
-                  }							      \
-              } else {							      \
-                P->fd_nextsize->bk_nextsize = P->bk_nextsize;		      \
-                P->bk_nextsize->fd_nextsize = P->fd_nextsize;		      \
-              }								      \
-          }								      \
-      }									      \
-}
-
 /*
    Indexing
 
@@ -1489,6 +1446,46 @@ typedef struct malloc_chunk *mbinptr;
 #define bin_index(sz) \
   ((in_smallbin_range (sz)) ? smallbin_index (sz) : largebin_index (sz))
 
+/* Take a chunk off a bin list.  */
+static void
+unlink_chunk (mstate av, mchunkptr p)
+{
+  if (chunksize (p) != prev_size (next_chunk (p)))
+    malloc_printerr ("corrupted size vs. prev_size");
+
+  mchunkptr fd = p->fd;
+  mchunkptr bk = p->bk;
+
+  if (__builtin_expect (fd->bk != p || bk->fd != p, 0))
+    malloc_printerr ("corrupted double-linked list");
+
+  fd->bk = bk;
+  bk->fd = fd;
+  if (!in_smallbin_range (chunksize_nomask (p)) && p->fd_nextsize != NULL)
+    {
+      if (p->fd_nextsize->bk_nextsize != p
+	  || p->bk_nextsize->fd_nextsize != p)
+	malloc_printerr ("corrupted double-linked list (not small)");
+
+      if (fd->fd_nextsize == NULL)
+	{
+	  if (p->fd_nextsize == p)
+	    fd->fd_nextsize = fd->bk_nextsize = fd;
+	  else
+	    {
+	      fd->fd_nextsize = p->fd_nextsize;
+	      fd->bk_nextsize = p->bk_nextsize;
+	      p->fd_nextsize->bk_nextsize = fd;
+	      p->bk_nextsize->fd_nextsize = fd;
+	    }
+	}
+      else
+	{
+	  p->fd_nextsize->bk_nextsize = p->bk_nextsize;
+	  p->bk_nextsize->fd_nextsize = p->fd_nextsize;
+	}
+    }
+}
 
 /*
    Unsorted chunks
@@ -1624,7 +1621,7 @@ static INTERNAL_SIZE_T global_max_fast;
 
 #define set_max_fast(s) \
   global_max_fast = (((s) == 0)						      \
-                     ? SMALLBIN_WIDTH : ((s + SIZE_SZ) & ~MALLOC_ALIGN_MASK))
+                     ? MIN_CHUNK_SIZE / 2 : ((s + SIZE_SZ) & ~MALLOC_ALIGN_MASK))
 
 static inline INTERNAL_SIZE_T
 get_max_fast (void)
@@ -2810,6 +2807,7 @@ systrim (size_t pad, mstate av)
 static void
 munmap_chunk (mchunkptr p)
 {
+  size_t pagesize = GLRO (dl_pagesize);
   INTERNAL_SIZE_T size = chunksize (p);
 
   assert (chunk_is_mmapped (p));
@@ -2819,6 +2817,7 @@ munmap_chunk (mchunkptr p)
   if (DUMPED_MAIN_ARENA_CHUNK (p))
     return;
 
+  uintptr_t mem = (uintptr_t) chunk2mem (p);
   uintptr_t block = (uintptr_t) p - prev_size (p);
   size_t total_size = prev_size (p) + size;
   /* Unfortunately we have to do the compilers job by hand here.  Normally
@@ -2826,7 +2825,8 @@ munmap_chunk (mchunkptr p)
      page size.  But gcc does not recognize the optimization possibility
      (in the moment at least) so we combine the two values into one before
      the bit test.  */
-  if (__builtin_expect (((block | total_size) & (GLRO (dl_pagesize) - 1)) != 0, 0))
+  if (__glibc_unlikely ((block | total_size) & (pagesize - 1)) != 0
+      || __glibc_unlikely (!powerof2 (mem & (pagesize - 1))))
     malloc_printerr ("munmap_chunk(): invalid pointer");
 
   atomic_decrement (&mp_.n_mmaps);
@@ -2849,16 +2849,22 @@ mremap_chunk (mchunkptr p, size_t new_size)
   char *cp;
 
   assert (chunk_is_mmapped (p));
-  assert (((size + offset) & (GLRO (dl_pagesize) - 1)) == 0);
+
+  uintptr_t block = (uintptr_t) p - offset;
+  uintptr_t mem = (uintptr_t) chunk2mem(p);
+  size_t total_size = offset + size;
+  if (__glibc_unlikely ((block | total_size) & (pagesize - 1)) != 0
+      || __glibc_unlikely (!powerof2 (mem & (pagesize - 1))))
+    malloc_printerr("mremap_chunk(): invalid pointer");
 
   /* Note the extra SIZE_SZ overhead as in mmap_chunk(). */
   new_size = ALIGN_UP (new_size + offset + SIZE_SZ, pagesize);
 
   /* No need to remap if the number of pages does not change.  */
-  if (size + offset == new_size)
+  if (total_size == new_size)
     return p;
 
-  cp = (char *) __mremap ((char *) p - offset, size + offset, new_size,
+  cp = (char *) __mremap ((char *) block, total_size, new_size,
                           MREMAP_MAYMOVE);
 
   if (cp == MAP_FAILED)
@@ -2899,7 +2905,7 @@ typedef struct tcache_entry
    time), this is for performance reasons.  */
 typedef struct tcache_perthread_struct
 {
-  char counts[TCACHE_MAX_BINS];
+  uint16_t counts[TCACHE_MAX_BINS];
   tcache_entry *entries[TCACHE_MAX_BINS];
 } tcache_perthread_struct;
 
@@ -2912,7 +2918,6 @@ static __always_inline void
 tcache_put (mchunkptr chunk, size_t tc_idx)
 {
   tcache_entry *e = (tcache_entry *) chunk2mem (chunk);
-  assert (tc_idx < TCACHE_MAX_BINS);
 
   /* Mark this chunk as "in the tcache" so the test in _int_free will
      detect a double free.  */
@@ -2929,8 +2934,6 @@ static __always_inline void *
 tcache_get (size_t tc_idx)
 {
   tcache_entry *e = tcache->entries[tc_idx];
-  assert (tc_idx < TCACHE_MAX_BINS);
-  assert (tcache->entries[tc_idx] > 0);
   tcache->entries[tc_idx] = e->next;
   --(tcache->counts[tc_idx]);
   e->key = NULL;
@@ -3021,6 +3024,9 @@ __libc_malloc (size_t bytes)
   mstate ar_ptr;
   void *victim;
 
+  _Static_assert (PTRDIFF_MAX <= SIZE_MAX / 2,
+                  "PTRDIFF_MAX is not more than half of SIZE_MAX");
+
   void *(*hook) (size_t, const void *)
     = atomic_forced_read (__malloc_hook);
   if (__builtin_expect (hook != NULL, 0))
@@ -3028,16 +3034,19 @@ __libc_malloc (size_t bytes)
 #if USE_TCACHE
   /* int_free also calls request2size, be careful to not pad twice.  */
   size_t tbytes;
-  checked_request2size (bytes, tbytes);
+  if (!checked_request2size (bytes, &tbytes))
+    {
+      __set_errno (ENOMEM);
+      return NULL;
+    }
   size_t tc_idx = csize2tidx (tbytes);
 
   MAYBE_INIT_TCACHE ();
 
   DIAG_PUSH_NEEDS_COMMENT;
   if (tc_idx < mp_.tcache_bins
-      /*&& tc_idx < TCACHE_MAX_BINS*/ /* to appease gcc */
       && tcache
-      && tcache->entries[tc_idx] != NULL)
+      && tcache->counts[tc_idx] > 0)
     {
       return tcache_get (tc_idx);
     }
@@ -3165,7 +3174,11 @@ __libc_realloc (void *oldmem, size_t bytes)
       && !DUMPED_MAIN_ARENA_CHUNK (oldp))
       malloc_printerr ("realloc(): invalid pointer");
 
-  checked_request2size (bytes, nb);
+  if (!checked_request2size (bytes, &nb))
+    {
+      __set_errno (ENOMEM);
+      return NULL;
+    }
 
   if (chunk_is_mmapped (oldp))
     {
@@ -3275,13 +3288,6 @@ _mid_memalign (size_t alignment, size_t bytes, void *address)
       return 0;
     }
 
-  /* Check for overflow.  */
-  if (bytes > SIZE_MAX - alignment - MINSIZE)
-    {
-      __set_errno (ENOMEM);
-      return 0;
-    }
-
 
   /* Make sure alignment is power of 2.  */
   if (!powerof2 (alignment))
@@ -3341,14 +3347,16 @@ __libc_pvalloc (size_t bytes)
 
   void *address = RETURN_ADDRESS (0);
   size_t pagesize = GLRO (dl_pagesize);
-  size_t rounded_bytes = ALIGN_UP (bytes, pagesize);
-
-  /* Check for overflow.  */
-  if (bytes > SIZE_MAX - 2 * pagesize - MINSIZE)
+  size_t rounded_bytes;
+  /* ALIGN_UP with overflow check.  */
+  if (__glibc_unlikely (__builtin_add_overflow (bytes,
+						pagesize - 1,
+						&rounded_bytes)))
     {
       __set_errno (ENOMEM);
       return 0;
     }
+  rounded_bytes = rounded_bytes & -(pagesize - 1);
 
   return _mid_memalign (pagesize, rounded_bytes, address);
 }
@@ -3358,38 +3366,30 @@ __libc_calloc (size_t n, size_t elem_size)
 {
   mstate av;
   mchunkptr oldtop, p;
-  INTERNAL_SIZE_T bytes, sz, csz, oldtopsize;
+  INTERNAL_SIZE_T sz, csz, oldtopsize;
   void *mem;
   unsigned long clearsize;
   unsigned long nclears;
   INTERNAL_SIZE_T *d;
+  ptrdiff_t bytes;
 
-  /* size_t is unsigned so the behavior on overflow is defined.  */
-  bytes = n * elem_size;
-#define HALF_INTERNAL_SIZE_T \
-  (((INTERNAL_SIZE_T) 1) << (8 * sizeof (INTERNAL_SIZE_T) / 2))
-  if (__builtin_expect ((n | elem_size) >= HALF_INTERNAL_SIZE_T, 0))
+  if (__glibc_unlikely (__builtin_mul_overflow (n, elem_size, &bytes)))
     {
-      if (elem_size != 0 && bytes / elem_size != n)
-        {
-          __set_errno (ENOMEM);
-          return 0;
-        }
+       __set_errno (ENOMEM);
+       return NULL;
     }
+  sz = bytes;
 
   void *(*hook) (size_t, const void *) =
     atomic_forced_read (__malloc_hook);
   if (__builtin_expect (hook != NULL, 0))
     {
-      sz = bytes;
       mem = (*hook)(sz, RETURN_ADDRESS (0));
       if (mem == 0)
         return 0;
 
       return memset (mem, 0, sz);
     }
-
-  sz = bytes;
 
   MAYBE_INIT_TCACHE ();
 
@@ -3537,12 +3537,16 @@ _int_malloc (mstate av, size_t bytes)
      Convert request size to internal form by adding SIZE_SZ bytes
      overhead plus possibly more to obtain necessary alignment and/or
      to obtain a size of at least MINSIZE, the smallest allocatable
-     size. Also, checked_request2size traps (returning 0) request sizes
+     size. Also, checked_request2size returns false for request sizes
      that are so large that they wrap around zero when padded and
      aligned.
    */
 
-  checked_request2size (bytes, nb);
+  if (!checked_request2size (bytes, &nb))
+    {
+      __set_errno (ENOMEM);
+      return NULL;
+    }
 
   /* There are no usable arenas.  Fall back to sysmalloc to get a chunk from
      mmap.  */
@@ -3738,7 +3742,7 @@ _int_malloc (mstate av, size_t bytes)
           if (__glibc_unlikely (bck->fd != victim)
               || __glibc_unlikely (victim->fd != unsorted_chunks (av)))
             malloc_printerr ("malloc(): unsorted double linked list corrupted");
-          if (__glibc_unlikely (prev_inuse(next)))
+          if (__glibc_unlikely (prev_inuse (next)))
             malloc_printerr ("malloc(): invalid next->prev_inuse (unsorted)");
 
           /*
@@ -3860,10 +3864,14 @@ _int_malloc (mstate av, size_t bytes)
                         {
                           victim->fd_nextsize = fwd;
                           victim->bk_nextsize = fwd->bk_nextsize;
+                          if (__glibc_unlikely (fwd->bk_nextsize->fd_nextsize != fwd))
+                            malloc_printerr ("malloc(): largebin double linked list corrupted (nextsize)");
                           fwd->bk_nextsize = victim;
                           victim->bk_nextsize->fd_nextsize = victim;
                         }
                       bck = fwd->bk;
+                      if (bck->fd != fwd)
+                        malloc_printerr ("malloc(): largebin double linked list corrupted (bk)");
                     }
                 }
               else
@@ -3928,7 +3936,7 @@ _int_malloc (mstate av, size_t bytes)
                 victim = victim->fd;
 
               remainder_size = size - nb;
-              unlink (av, victim, bck, fwd);
+              unlink_chunk (av, victim);
 
               /* Exhaust */
               if (remainder_size < MINSIZE)
@@ -4030,7 +4038,7 @@ _int_malloc (mstate av, size_t bytes)
               remainder_size = size - nb;
 
               /* unlink */
-              unlink (av, victim, bck, fwd);
+              unlink_chunk (av, victim);
 
               /* Exhaust */
               if (remainder_size < MINSIZE)
@@ -4322,7 +4330,7 @@ _int_free (mstate av, mchunkptr p, int have_lock)
       p = chunk_at_offset(p, -((long) prevsize));
       if (__glibc_unlikely (chunksize(p) != prevsize))
         malloc_printerr ("corrupted size vs. prev_size while consolidating");
-      unlink(av, p, bck, fwd);
+      unlink_chunk (av, p);
     }
 
     if (nextchunk != av->top) {
@@ -4331,7 +4339,7 @@ _int_free (mstate av, mchunkptr p, int have_lock)
 
       /* consolidate forward */
       if (!nextinuse) {
-	unlink(av, nextchunk, bck, fwd);
+	unlink_chunk (av, nextchunk);
 	size += nextsize;
       } else
 	clear_inuse_bit_at_offset(nextchunk, 0);
@@ -4444,8 +4452,6 @@ static void malloc_consolidate(mstate av)
   INTERNAL_SIZE_T nextsize;
   INTERNAL_SIZE_T prevsize;
   int             nextinuse;
-  mchunkptr       bck;
-  mchunkptr       fwd;
 
   atomic_store_relaxed (&av->have_fastchunks, false);
 
@@ -4485,7 +4491,7 @@ static void malloc_consolidate(mstate av)
 	  p = chunk_at_offset(p, -((long) prevsize));
 	  if (__glibc_unlikely (chunksize(p) != prevsize))
 	    malloc_printerr ("corrupted size vs. prev_size in fastbins");
-	  unlink(av, p, bck, fwd);
+	  unlink_chunk (av, p);
 	}
 
 	if (nextchunk != av->top) {
@@ -4493,7 +4499,7 @@ static void malloc_consolidate(mstate av)
 
 	  if (!nextinuse) {
 	    size += nextsize;
-	    unlink(av, nextchunk, bck, fwd);
+	    unlink_chunk (av, nextchunk);
 	  } else
 	    clear_inuse_bit_at_offset(nextchunk, 0);
 
@@ -4541,9 +4547,6 @@ _int_realloc(mstate av, mchunkptr oldp, INTERNAL_SIZE_T oldsize,
   mchunkptr        remainder;       /* extra space at end of newp */
   unsigned long    remainder_size;  /* its size */
 
-  mchunkptr        bck;             /* misc temp for linking */
-  mchunkptr        fwd;             /* misc temp for linking */
-
   /* oldmem size */
   if (__builtin_expect (chunksize_nomask (oldp) <= 2 * SIZE_SZ, 0)
       || __builtin_expect (oldsize >= av->system_mem, 0))
@@ -4588,7 +4591,7 @@ _int_realloc(mstate av, mchunkptr oldp, INTERNAL_SIZE_T oldsize,
                (unsigned long) (nb))
         {
           newp = oldp;
-          unlink (av, next, bck, fwd);
+          unlink_chunk (av, next);
         }
 
       /* allocate, copy, free */
@@ -4665,20 +4668,16 @@ _int_memalign (mstate av, size_t alignment, size_t bytes)
 
 
 
-  checked_request2size (bytes, nb);
+  if (!checked_request2size (bytes, &nb))
+    {
+      __set_errno (ENOMEM);
+      return NULL;
+    }
 
   /*
      Strategy: find a spot within that chunk that meets the alignment
      request, and then possibly free the leading and trailing space.
    */
-
-
-  /* Check for overflow.  */
-  if (nb > SIZE_MAX - alignment - MINSIZE)
-    {
-      __set_errno (ENOMEM);
-      return 0;
-    }
 
   /* Call malloc with worst case padding to hit alignment. */
 
@@ -5008,8 +5007,7 @@ __malloc_stats (void)
 /*
    ------------------------------ mallopt ------------------------------
  */
-static inline int
-__always_inline
+static __always_inline int
 do_set_trim_threshold (size_t value)
 {
   LIBC_PROBE (memory_mallopt_trim_threshold, 3, value, mp_.trim_threshold,
@@ -5019,8 +5017,7 @@ do_set_trim_threshold (size_t value)
   return 1;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_top_pad (size_t value)
 {
   LIBC_PROBE (memory_mallopt_top_pad, 3, value, mp_.top_pad,
@@ -5030,8 +5027,7 @@ do_set_top_pad (size_t value)
   return 1;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_mmap_threshold (size_t value)
 {
   /* Forbid setting the threshold too high.  */
@@ -5046,8 +5042,7 @@ do_set_mmap_threshold (size_t value)
   return 0;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_mmaps_max (int32_t value)
 {
   LIBC_PROBE (memory_mallopt_mmap_max, 3, value, mp_.n_mmaps_max,
@@ -5057,15 +5052,13 @@ do_set_mmaps_max (int32_t value)
   return 1;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_mallopt_check (int32_t value)
 {
   return 1;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_perturb_byte (int32_t value)
 {
   LIBC_PROBE (memory_mallopt_perturb, 2, value, perturb_byte);
@@ -5073,8 +5066,7 @@ do_set_perturb_byte (int32_t value)
   return 1;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_arena_test (size_t value)
 {
   LIBC_PROBE (memory_mallopt_arena_test, 2, value, mp_.arena_test);
@@ -5082,8 +5074,7 @@ do_set_arena_test (size_t value)
   return 1;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_arena_max (size_t value)
 {
   LIBC_PROBE (memory_mallopt_arena_max, 2, value, mp_.arena_max);
@@ -5092,30 +5083,32 @@ do_set_arena_max (size_t value)
 }
 
 #if USE_TCACHE
-static inline int
-__always_inline
+static __always_inline int
 do_set_tcache_max (size_t value)
 {
-  if (value >= 0 && value <= MAX_TCACHE_SIZE)
+  if (value <= MAX_TCACHE_SIZE)
     {
       LIBC_PROBE (memory_tunable_tcache_max_bytes, 2, value, mp_.tcache_max_bytes);
       mp_.tcache_max_bytes = value;
       mp_.tcache_bins = csize2tidx (request2size(value)) + 1;
+      return 1;
     }
-  return 1;
+  return 0;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_tcache_count (size_t value)
 {
-  LIBC_PROBE (memory_tunable_tcache_count, 2, value, mp_.tcache_count);
-  mp_.tcache_count = value;
-  return 1;
+  if (value <= MAX_TCACHE_COUNT)
+    {
+      LIBC_PROBE (memory_tunable_tcache_count, 2, value, mp_.tcache_count);
+      mp_.tcache_count = value;
+      return 1;
+    }
+  return 0;
 }
 
-static inline int
-__always_inline
+static __always_inline int
 do_set_tcache_unsorted_limit (size_t value)
 {
   LIBC_PROBE (memory_tunable_tcache_unsorted_limit, 2, value, mp_.tcache_unsorted_limit);
@@ -5123,6 +5116,19 @@ do_set_tcache_unsorted_limit (size_t value)
   return 1;
 }
 #endif
+
+static inline int
+__always_inline
+do_set_mxfast (size_t value)
+{
+  if (value <= MAX_FAST_SIZE)
+    {
+      LIBC_PROBE (memory_mallopt_mxfast, 2, value, get_max_fast ());
+      set_max_fast (value);
+      return 1;
+    }
+  return 0;
+}
 
 int
 __libc_mallopt (int param_number, int value)
@@ -5140,24 +5146,24 @@ __libc_mallopt (int param_number, int value)
      (see definition of set_max_fast).  */
   malloc_consolidate (av);
 
+  /* Many of these helper functions take a size_t.  We do not worry
+     about overflow here, because negative int values will wrap to
+     very large size_t values and the helpers have sufficient range
+     checking for such conversions.  Many of these helpers are also
+     used by the tunables macros in arena.c.  */
+
   switch (param_number)
     {
     case M_MXFAST:
-      if (value >= 0 && value <= MAX_FAST_SIZE)
-        {
-          LIBC_PROBE (memory_mallopt_mxfast, 2, value, get_max_fast ());
-          set_max_fast (value);
-        }
-      else
-        res = 0;
+      res = do_set_mxfast (value);
       break;
 
     case M_TRIM_THRESHOLD:
-      do_set_trim_threshold (value);
+      res = do_set_trim_threshold (value);
       break;
 
     case M_TOP_PAD:
-      do_set_top_pad (value);
+      res = do_set_top_pad (value);
       break;
 
     case M_MMAP_THRESHOLD:
@@ -5165,25 +5171,25 @@ __libc_mallopt (int param_number, int value)
       break;
 
     case M_MMAP_MAX:
-      do_set_mmaps_max (value);
+      res = do_set_mmaps_max (value);
       break;
 
     case M_CHECK_ACTION:
-      do_set_mallopt_check (value);
+      res = do_set_mallopt_check (value);
       break;
 
     case M_PERTURB:
-      do_set_perturb_byte (value);
+      res = do_set_perturb_byte (value);
       break;
 
     case M_ARENA_TEST:
       if (value > 0)
-	do_set_arena_test (value);
+	res = do_set_arena_test (value);
       break;
 
     case M_ARENA_MAX:
       if (value > 0)
-	do_set_arena_max (value);
+	res = do_set_arena_max (value);
       break;
     }
   __libc_lock_unlock (av->mutex);
@@ -5415,6 +5421,12 @@ __malloc_info (int options, FILE *fp)
 
       __libc_lock_lock (ar_ptr->mutex);
 
+      /* Account for top chunk.  The top-most available chunk is
+	 treated specially and is never in any bin. See "initial_top"
+	 comments.  */
+      avail = chunksize (ar_ptr->top);
+      nblocks = 1;  /* Top always exists.  */
+
       for (size_t i = 0; i < NFASTBINS; ++i)
 	{
 	  mchunkptr p = fastbin (ar_ptr, i);
@@ -5500,7 +5512,7 @@ __malloc_info (int options, FILE *fp)
 
       for (size_t i = 0; i < nsizes; ++i)
 	if (sizes[i].count != 0 && i != NFASTBINS)
-	  fprintf (fp, "							      \
+	  fprintf (fp, "\
   <size from=\"%zu\" to=\"%zu\" total=\"%zu\" count=\"%zu\"/>\n",
 		   sizes[i].from, sizes[i].to, sizes[i].total, sizes[i].count);
 

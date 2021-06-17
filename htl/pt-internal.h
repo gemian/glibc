@@ -1,5 +1,5 @@
 /* Internal defenitions for pthreads library.
-   Copyright (C) 2000-2018 Free Software Foundation, Inc.
+   Copyright (C) 2000-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library;  if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #ifndef _PT_INTERNAL_H
 #define _PT_INTERNAL_H	1
@@ -37,6 +37,8 @@
 # include <ldsodefs.h>
 #endif
 
+#include <tls.h>
+
 /* Thread state.  */
 enum pthread_state
 {
@@ -57,16 +59,6 @@ enum pthread_state
 #ifndef PTHREAD_SYSDEP_MEMBERS
 # define PTHREAD_SYSDEP_MEMBERS
 #endif
-
-#if !(IS_IN (libpthread))
-/* Type of the TCB.  */
-typedef struct
-{
-  void *tcb;			/* Points to this structure.  */
-  void *dtv;			/* Vector of pointers to TLS data.  */
-  thread_t self;		/* This thread's control port.  */
-} tcbhead_t;
-#endif /* ! IS_IN (libpthread) */
 
 /* This structure describes a POSIX thread.  */
 struct __pthread
@@ -181,12 +173,14 @@ extern int __pthread_concurrency;
    brain-dead users of the pthread interface incorrectly assume that 0
    is an invalid pthread id.)  */
 extern struct __pthread **__pthread_threads;
+extern int __pthread_max_threads;
 extern pthread_rwlock_t __pthread_threads_lock;
 
 #define __pthread_getid(thread) \
-  ({ struct __pthread *__t;                                                  \
+  ({ struct __pthread *__t = NULL;                                           \
      __pthread_rwlock_rdlock (&__pthread_threads_lock);                      \
-     __t = __pthread_threads[thread - 1];                                    \
+     if (thread <= __pthread_max_threads)                                    \
+       __t = __pthread_threads[thread - 1];                                  \
      __pthread_rwlock_unlock (&__pthread_threads_lock);                      \
      __t; })
 
@@ -273,6 +267,14 @@ extern error_t __pthread_timedblock (struct __pthread *__restrict thread,
 				     const struct timespec *__restrict abstime,
 				     clockid_t clock_id);
 
+/* Block THREAD with interrupts.  */
+extern error_t __pthread_block_intr (struct __pthread *thread);
+
+/* Block THREAD until *ABSTIME is reached, with interrupts.  */
+extern error_t __pthread_timedblock_intr (struct __pthread *__restrict thread,
+					  const struct timespec *__restrict abstime,
+					  clockid_t clock_id);
+
 /* Wakeup THREAD.  */
 extern void __pthread_wakeup (struct __pthread *thread);
 
@@ -320,5 +322,38 @@ extern const struct __pthread_rwlockattr __pthread_default_rwlockattr;
 
 /* Default condition attributes.  */
 extern const struct __pthread_condattr __pthread_default_condattr;
+
+/* Semaphore encoding.
+   See nptl implementation for the details.  */
+struct new_sem
+{
+#if __HAVE_64B_ATOMICS
+  /* The data field holds both value (in the least-significant 32 bits) and
+     nwaiters.  */
+# if __BYTE_ORDER == __LITTLE_ENDIAN
+#  define SEM_VALUE_OFFSET 0
+# elif __BYTE_ORDER == __BIG_ENDIAN
+#  define SEM_VALUE_OFFSET 1
+# else
+#  error Unsupported byte order.
+# endif
+# define SEM_NWAITERS_SHIFT 32
+# define SEM_VALUE_MASK (~(unsigned int)0)
+  uint64_t data;
+  int pshared;
+#define __SEMAPHORE_INITIALIZER(value, pshared) \
+  { (value), (pshared) }
+#else
+# define SEM_VALUE_SHIFT 1
+# define SEM_NWAITERS_MASK ((unsigned int)1)
+  unsigned int value;
+  unsigned int nwaiters;
+  int pshared;
+#define __SEMAPHORE_INITIALIZER(value, pshared) \
+  { (value) << SEM_VALUE_SHIFT, 0, (pshared) }
+#endif
+};
+
+extern int __sem_waitfast (struct new_sem *isem, int definitive_result);
 
 #endif /* pt-internal.h */

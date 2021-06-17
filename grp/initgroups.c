@@ -1,4 +1,4 @@
-/* Copyright (C) 1989, 1991-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1989, 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <assert.h>
 #include <errno.h>
@@ -79,12 +79,12 @@ internal_getgrouplist (const char *user, gid_t group, long int *size,
 
   if (__nss_initgroups_database == NULL)
     {
-      if (__nss_database_lookup ("initgroups", NULL, "",
-				 &__nss_initgroups_database) < 0)
+      if (__nss_database_lookup2 ("initgroups", NULL, "",
+				  &__nss_initgroups_database) < 0)
 	{
 	  if (__nss_group_database == NULL)
-	    no_more = __nss_database_lookup ("group", NULL, DEFAULT_CONFIG,
-					     &__nss_group_database);
+	    no_more = __nss_database_lookup2 ("group", NULL, DEFAULT_CONFIG,
+					      &__nss_group_database);
 
 	  __nss_initgroups_database = __nss_group_database;
 	}

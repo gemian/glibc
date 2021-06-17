@@ -1,4 +1,4 @@
-/* Copyright (C) 1998-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1998-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Zack Weinberg <zack@rabi.phys.columbia.edu>, 1998.
 
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -41,7 +41,7 @@ const char __libc_ptyname2[] attribute_hidden = PTYNAME2;
 
 /* Open a master pseudo terminal and return its file descriptor.  */
 int
-__getpt (void)
+__bsd_openpt (int oflag)
 {
   char buf[sizeof (_PATH_PTY) + 2];
   const char *p, *q;
@@ -61,7 +61,7 @@ __getpt (void)
 
 	  s[1] = *q;
 
-	  fd = __open (buf, O_RDWR);
+	  fd = __open (buf, oflag);
 	  if (fd != -1)
 	    return fd;
 
@@ -74,18 +74,20 @@ __getpt (void)
   return -1;
 }
 
-#undef __getpt
+#ifndef HAVE_GETPT
+int
+__getpt (void)
+{
+  return __bsd_openpt (O_RDWR);
+}
 weak_alias (__getpt, getpt)
+#endif
 
 #ifndef HAVE_POSIX_OPENPT
-/* We cannot define posix_openpt in general for BSD systems.  */
 int
 __posix_openpt (int oflag)
 {
-  __set_errno (ENOSYS);
-  return -1;
+  return __bsd_openpt (oflag);
 }
 weak_alias (__posix_openpt, posix_openpt)
-
-stub_warning (posix_openpt)
 #endif

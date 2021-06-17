@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1999-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Andreas Jaeger <aj@suse.de>, 1999.
 
@@ -13,7 +13,7 @@
    GNU General Public License for more details.
 
    You should have received a copy of the GNU General Public License
-   along with this program; if not, see <http://www.gnu.org/licenses/>.  */
+   along with this program; if not, see <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <error.h>
@@ -152,6 +152,14 @@ print_entry (const char *lib, int flag, unsigned int osversion,
   printf (") => %s\n", key);
 }
 
+/* Print an error and exit if the new-file cache is internally
+   inconsistent.  */
+static void
+check_new_cache (struct cache_file_new *cache)
+{
+  if (! cache_file_new_matches_endian (cache))
+    error (EXIT_FAILURE, 0, _("Cache file has wrong endianness.\n"));
+}
 
 /* Print the whole cache file, if a file contains the new cache format
    hidden in the old one, print the contents of the new format.  */
@@ -193,12 +201,18 @@ print_cache (const char *cache_name)
 	  || memcmp (cache_new->version, CACHE_VERSION,
 		      sizeof CACHE_VERSION - 1))
 	error (EXIT_FAILURE, 0, _("File is not a cache file.\n"));
+      check_new_cache (cache_new);
       format = 1;
       /* This is where the strings start.  */
       cache_data = (const char *) cache_new;
     }
   else
     {
+      /* Check for corruption, avoiding overflow.  */
+      if ((cache_size - sizeof (struct cache_file)) / sizeof (struct file_entry)
+	  < cache->nlibs)
+	error (EXIT_FAILURE, 0, _("File is not a cache file.\n"));
+
       size_t offset = ALIGN_CACHE (sizeof (struct cache_file)
 				   + (cache->nlibs
 				      * sizeof (struct file_entry)));
@@ -206,8 +220,8 @@ print_cache (const char *cache_name)
       cache_data = (const char *) &cache->libs[cache->nlibs];
 
       /* Check for a new cache embedded in the old format.  */
-      if (cache_size >
-	  (offset + sizeof (struct cache_file_new)))
+      if (cache_size
+	  > (offset + sizeof (struct cache_file_new)))
 	{
 
 	  cache_new = (struct cache_file_new *) ((void *)cache + offset);
@@ -217,6 +231,7 @@ print_cache (const char *cache_name)
 	      && memcmp (cache_new->version, CACHE_VERSION,
 			 sizeof CACHE_VERSION - 1) == 0)
 	    {
+	      check_new_cache (cache_new);
 	      cache_data = (const char *) cache_new;
 	      format = 1;
 	    }
@@ -356,6 +371,7 @@ save_cache (const char *cache_name)
 
       file_entries_new->nlibs = cache_entry_count;
       file_entries_new->len_strings = total_strlen;
+      file_entries_new->flags = cache_file_new_flags_endian_current;
     }
 
   /* Pad for alignment of cache_file_new.  */
@@ -707,9 +723,9 @@ load_aux_cache (const char *aux_cache_name)
   if (aux_cache == MAP_FAILED
       || aux_cache_size < sizeof (struct aux_cache_file)
       || memcmp (aux_cache->magic, AUX_CACHEMAGIC, sizeof AUX_CACHEMAGIC - 1)
-      || aux_cache_size != (sizeof(struct aux_cache_file) +
-			    aux_cache->nlibs * sizeof(struct aux_cache_file_entry) +
-			    aux_cache->len_strings))
+      || aux_cache_size != (sizeof (struct aux_cache_file)
+			    + aux_cache->nlibs * sizeof (struct aux_cache_file_entry)
+			    + aux_cache->len_strings))
     {
       close (fd);
       init_aux_cache ();

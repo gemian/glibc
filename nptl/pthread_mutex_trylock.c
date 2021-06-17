@@ -1,4 +1,4 @@
-/* Copyright (C) 2002-2018 Free Software Foundation, Inc.
+/* Copyright (C) 2002-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Ulrich Drepper <drepper@redhat.com>, 2002.
 
@@ -14,13 +14,14 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <assert.h>
 #include <errno.h>
 #include <stdlib.h>
 #include "pthreadP.h"
 #include <lowlevellock.h>
+#include <futex-internal.h>
 
 #ifndef lll_trylock_elision
 #define lll_trylock_elision(a,t) lll_trylock(a)
@@ -130,7 +131,7 @@ __pthread_mutex_trylock (pthread_mutex_t *mutex)
 	      __asm ("" ::: "memory");
 	      THREAD_SETMEM (THREAD_SELF, robust_head.list_op_pending, NULL);
 
-	      /* Note that we deliberately exist here.  If we fall
+	      /* Note that we deliberately exit here.  If we fall
 		 through to the end of the function __nusers would be
 		 incremented which is not correct because the old
 		 owner has to be discounted.  */
@@ -346,11 +347,8 @@ __pthread_mutex_trylock (pthread_mutex_t *mutex)
 	    /* This mutex is now not recoverable.  */
 	    mutex->__data.__count = 0;
 
-	    INTERNAL_SYSCALL_DECL (__err);
-	    INTERNAL_SYSCALL (futex, __err, 4, &mutex->__data.__lock,
-			      __lll_private_flag (FUTEX_UNLOCK_PI,
-						  PTHREAD_ROBUST_MUTEX_PSHARED (mutex)),
-			      0, 0);
+	    futex_unlock_pi ((unsigned int *) &mutex->__data.__lock,
+			     PTHREAD_ROBUST_MUTEX_PSHARED (mutex));
 
 	    /* To the kernel, this will be visible after the kernel has
 	       acquired the mutex in the syscall.  */

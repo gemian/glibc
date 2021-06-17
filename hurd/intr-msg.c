@@ -1,5 +1,5 @@
 /* Replacement for mach_msg used in interruptible Hurd RPCs.
-   Copyright (C) 1995-2018 Free Software Foundation, Inc.
+   Copyright (C) 1995-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <mach.h>
 #include <mach/mig_errors.h>
@@ -362,12 +362,12 @@ _hurd_intr_rpc_mach_msg (mach_msg_header_t *msg,
 		 1, TRUE, FALSE, FALSE, 0 } };
 #endif
 
-        if (m->reply.RetCode == EINTR &&
-	    m->header.msgh_size == sizeof m->reply &&
+        if (m->reply.RetCode == EINTR
+	    && m->header.msgh_size == sizeof m->reply
 #ifdef MACH_MSG_TYPE_BIT
-	    m->check.type == check.i &&
+	    && m->check.type == check.i
 #endif
-	    !(m->header.msgh_bits & MACH_MSGH_BITS_COMPLEX))
+	    && !(m->header.msgh_bits & MACH_MSGH_BITS_COMPLEX))
 	  {
 	    /* It is indeed EINTR.  Is the interrupt for us?  */
 	    if (ss->intr_port != MACH_PORT_NULL)

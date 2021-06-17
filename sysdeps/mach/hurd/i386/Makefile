@@ -7,6 +7,10 @@ ifeq ($(subdir),debug)
 gen-as-const-headers += signal-defines.sym
 endif
 
+ifeq ($(subdir),setjmp)
+gen-as-const-headers += signal-defines.sym
+endif
+
 ifeq ($(subdir),csu)
 ifeq (yes,$(build-shared))
 sysdep_routines += divdi3
@@ -87,6 +91,10 @@ test-xfail-XOPEN2K8/sys/socket.h/conform = yes
 test-xfail-XOPEN2K8/sys/types.h/conform = yes
 test-xfail-XOPEN2K8/stdlib.h/conform = yes
 test-xfail-XOPEN2K8/arpa/inet.h/conform = yes
+
+# For bug 23819
+test-xfail-ISO11/threads.h/linknamespace = yes
+test-xfail-ISO11/threads.h/conform = yes
 endif
 
 # For bug 23286
@@ -101,6 +109,8 @@ ifeq ($(subdir),elf)
 # We do use nested functions involving creation of trampolines, notably for
 # callbacks whose parameters don't permit to get the context parameters.
 check-execstack-xfail += ld.so libc.so libpthread.so
+# We always create a thread for signals
+test-xfail-tst-single_threaded-pthread-static = yes
 endif
 
 ifeq ($(subdir),stdlib)

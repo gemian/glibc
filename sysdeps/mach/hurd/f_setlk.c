@@ -1,5 +1,5 @@
 /* f_setlk -- locking part of fcntl
-   Copyright (C) 2014-2015 Free Software Foundation, Inc.
+   Copyright (C) 2014-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <sys/types.h>
 #include <sys/file.h>
@@ -35,8 +35,8 @@ __f_setlk (int fd, int type, int whence, __off64_t start, __off64_t len, int wai
 
   switch (type)
     {
-    case F_RDLCK: cmd = LOCK_SH | __LOCK_ATOMIC; break;
-    case F_WRLCK: cmd = LOCK_EX | __LOCK_ATOMIC; break;
+    case F_RDLCK: cmd = LOCK_SH; break;
+    case F_WRLCK: cmd = LOCK_EX; break;
     case F_UNLCK: cmd = LOCK_UN; break;
     default:
       errno = EINVAL;

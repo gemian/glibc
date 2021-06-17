@@ -1,4 +1,4 @@
-# Copyright (C) 1994-2018 Free Software Foundation, Inc.
+# Copyright (C) 1994-2020 Free Software Foundation, Inc.
 # This file is part of the GNU C Library.
 
 # The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
 # You should have received a copy of the GNU Lesser General Public
 # License along with the GNU C Library; if not, see
-# <http://www.gnu.org/licenses/>.
+# <https://www.gnu.org/licenses/>.
 
 #
 #	Sub-makefile for resolv portion of the library.
@@ -52,7 +52,6 @@ tests += \
   tst-ns_name_pton \
   tst-res_hconf_reorder \
   tst-res_hnok \
-  tst-res_use_inet6 \
   tst-resolv-basic \
   tst-resolv-binary \
   tst-resolv-edns \
@@ -69,14 +68,12 @@ tests += \
   tst-resolv-ai_idn-latin1 \
   tst-resolv-ai_idn-nolibidn2 \
   tst-resolv-canonname \
-
-# uses DEPRECATED_RES_USE_INET6 from <resolv-internal.h>.
-tests-internal += \
-  tst-resolv-res_init \
-  tst-resolv-res_init-thread \
+  tst-resolv-trustad \
 
 # Needs resolv_context.
 tests-internal += \
+  tst-resolv-res_init \
+  tst-resolv-res_init-thread \
   tst-resolv-res_ninit \
   tst-resolv-threads \
 
@@ -105,7 +102,7 @@ libresolv-routines := res_comp res_debug \
 		      res_data res_mkquery res_query res_send		\
 		      inet_net_ntop inet_net_pton inet_neta base64	\
 		      ns_parse ns_name ns_netint ns_ttl ns_print	\
-		      ns_samedomain ns_date \
+		      ns_samedomain ns_date res_enable_icmp \
 		      compat-hooks compat-gethnamaddr
 
 libanl-routines := gai_cancel gai_error gai_misc gai_notify gai_suspend \
@@ -175,7 +172,6 @@ $(objpfx)mtrace-tst-resolv-res_ninit.out: $(objpfx)tst-resolv-res_ninit.out
 
 $(objpfx)tst-bug18665-tcp: $(objpfx)libresolv.so $(shared-thread-library)
 $(objpfx)tst-bug18665: $(objpfx)libresolv.so $(shared-thread-library)
-$(objpfx)tst-res_use_inet6: $(objpfx)libresolv.so $(shared-thread-library)
 $(objpfx)tst-resolv-ai_idn: \
   $(libdl) $(objpfx)libresolv.so $(shared-thread-library)
 $(objpfx)tst-resolv-ai_idn-latin1: \
@@ -204,6 +200,7 @@ $(objpfx)tst-resolv-threads: \
   $(libdl) $(objpfx)libresolv.so $(shared-thread-library)
 $(objpfx)tst-resolv-canonname: \
   $(libdl) $(objpfx)libresolv.so $(shared-thread-library)
+$(objpfx)tst-resolv-trustad: $(objpfx)libresolv.so $(shared-thread-library)
 
 $(objpfx)tst-ns_name: $(objpfx)libresolv.so
 $(objpfx)tst-ns_name.out: tst-ns_name.data
@@ -211,7 +208,3 @@ $(objpfx)tst-ns_name_compress: $(objpfx)libresolv.so
 $(objpfx)tst-ns_name_pton: $(objpfx)libresolv.so
 $(objpfx)tst-res_hnok: $(objpfx)libresolv.so
 $(objpfx)tst-p_secstodate: $(objpfx)libresolv.so
-
-
-# This test case uses the deprecated RES_USE_INET6 resolver option.
-CFLAGS-tst-res_use_inet6.c += -Wno-error

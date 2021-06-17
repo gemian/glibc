@@ -1,4 +1,4 @@
-/* Copyright (C) 1994-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1994-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <unistd.h>
@@ -271,11 +271,11 @@ __fork (void)
 						      port,
 						      MACH_MSG_TYPE_MOVE_SEND))
 		    LOSE;
-		  if (refs > 1 &&
-		      (err = __mach_port_mod_refs (newtask,
-						   portnames[i],
-						   MACH_PORT_RIGHT_SEND,
-						   refs - 1)))
+		  if (refs > 1
+		      && (err = __mach_port_mod_refs (newtask,
+						      portnames[i],
+						      MACH_PORT_RIGHT_SEND,
+						      refs - 1)))
 		    LOSE;
 		}
 	      if (porttypes[i] & MACH_PORT_TYPE_SEND_ONCE)
@@ -297,8 +297,8 @@ __fork (void)
 		    LOSE;
 		}
 	    }
-	  else if (porttypes[i] &
-		   (MACH_PORT_TYPE_SEND|MACH_PORT_TYPE_DEAD_NAME))
+	  else if (porttypes[i]
+		   & (MACH_PORT_TYPE_SEND|MACH_PORT_TYPE_DEAD_NAME))
 	    {
 	      /* This is a send right or a dead name.
 		 Give the child as many references for it as we have.  */
@@ -367,8 +367,8 @@ __fork (void)
 		LOSE;
 	      if (insert == MACH_PORT_NULL)
 		continue;
-	      if (insert == portnames[i] &&
-		  (porttypes[i] & MACH_PORT_TYPE_DEAD_NAME))
+	      if (insert == portnames[i]
+		  && (porttypes[i] & MACH_PORT_TYPE_DEAD_NAME))
 		/* This is a dead name; allocate another dead name
 		   with the same name in the child.  */
 	      allocate_dead_name:
@@ -393,10 +393,10 @@ __fork (void)
 		    assert (__mach_port_extract_right (newtask, portnames[i],
 						       MACH_MSG_TYPE_COPY_SEND,
 						       &childport,
-						       &poly) == 0 &&
-			    childport == insert &&
-			    __mach_port_deallocate (__mach_task_self (),
-						    childport) == 0);
+						       &poly) == 0
+			    && childport == insert
+			    && __mach_port_deallocate (__mach_task_self (),
+						       childport) == 0);
 		    break;
 		  }
 
@@ -411,11 +411,11 @@ __fork (void)
 
 		case KERN_SUCCESS:
 		  /* Give the child as many user references as we have.  */
-		  if (refs > 1 &&
-		      (err = __mach_port_mod_refs (newtask,
-						   portnames[i],
-						   MACH_PORT_RIGHT_SEND,
-						   refs - 1)))
+		  if (refs > 1
+		      && (err = __mach_port_mod_refs (newtask,
+						      portnames[i],
+						      MACH_PORT_RIGHT_SEND,
+						      refs - 1)))
 		    LOSE;
 		}
 	    }
@@ -432,34 +432,36 @@ __fork (void)
       resume_threads ();
 
       /* Create the child main user thread and signal thread.  */
-      if ((err = __thread_create (newtask, &thread)) ||
-	  (err = __thread_create (newtask, &sigthread)))
+      if ((err = __thread_create (newtask, &thread))
+	  || (err = __thread_create (newtask, &sigthread)))
 	LOSE;
 
       /* Insert send rights for those threads.  We previously allocated
 	 dead name rights with the names we want to give the thread ports
 	 in the child as placeholders.  Now deallocate them so we can use
 	 the names.  */
-      if ((err = __mach_port_deallocate (newtask, ss->thread)) ||
-	  (err = __mach_port_insert_right (newtask, ss->thread,
-					   thread, MACH_MSG_TYPE_COPY_SEND)))
+      if ((err = __mach_port_deallocate (newtask, ss->thread))
+	  || (err = __mach_port_insert_right (newtask, ss->thread,
+					      thread,
+					      MACH_MSG_TYPE_COPY_SEND)))
 	LOSE;
       /* XXX consumed? (_hurd_sigthread is no more) */
-      if (thread_refs > 1 &&
-	  (err = __mach_port_mod_refs (newtask, ss->thread,
-				       MACH_PORT_RIGHT_SEND,
-				       thread_refs - 1)))
+      if (thread_refs > 1
+	  && (err = __mach_port_mod_refs (newtask, ss->thread,
+					  MACH_PORT_RIGHT_SEND,
+					  thread_refs - 1)))
 	LOSE;
       if ((_hurd_msgport_thread != MACH_PORT_NULL) /* Let user have none.  */
-	  && ((err = __mach_port_deallocate (newtask, _hurd_msgport_thread)) ||
-	      (err = __mach_port_insert_right (newtask, _hurd_msgport_thread,
-					       sigthread,
-					       MACH_MSG_TYPE_COPY_SEND))))
+	  && ((err = __mach_port_deallocate (newtask, _hurd_msgport_thread))
+	      || (err = __mach_port_insert_right (newtask,
+						  _hurd_msgport_thread,
+						  sigthread,
+						  MACH_MSG_TYPE_COPY_SEND))))
 	LOSE;
-      if (sigthread_refs > 1 &&
-	  (err = __mach_port_mod_refs (newtask, _hurd_msgport_thread,
-				       MACH_PORT_RIGHT_SEND,
-				       sigthread_refs - 1)))
+      if (sigthread_refs > 1
+	  && (err = __mach_port_mod_refs (newtask, _hurd_msgport_thread,
+					  MACH_PORT_RIGHT_SEND,
+					  sigthread_refs - 1)))
 	LOSE;
 
       /* This seems like a convenient juncture to copy the proc server's
@@ -495,7 +497,7 @@ __fork (void)
 #else
       if (__hurd_sigthread_stack_end == 0)
 	{
-	  /* The signal thread has a stack assigned by cthreads.
+	  /* The signal thread has a stack assigned by pthread.
 	     The threadvar_stack variables conveniently tell us how
 	     to get to the highest address in the stack, just below
 	     the per-thread variables.  */

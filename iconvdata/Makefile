@@ -1,4 +1,4 @@
-# Copyright (C) 1997-2018 Free Software Foundation, Inc.
+# Copyright (C) 1997-2020 Free Software Foundation, Inc.
 # This file is part of the GNU C Library.
 
 # The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
 # You should have received a copy of the GNU Lesser General Public
 # License along with the GNU C Library; if not, see
-# <http://www.gnu.org/licenses/>.
+# <https://www.gnu.org/licenses/>.
 
 #
 #	Makefile for iconv data and code.
@@ -73,7 +73,7 @@ modules.so := $(addsuffix .so, $(modules))
 ifeq (yes,$(build-shared))
 tests = bug-iconv1 bug-iconv2 tst-loading tst-e2big tst-iconv4 bug-iconv4 \
 	tst-iconv6 bug-iconv5 bug-iconv6 tst-iconv7 bug-iconv8 bug-iconv9 \
-	bug-iconv10 bug-iconv11 bug-iconv12
+	bug-iconv10 bug-iconv11 bug-iconv12 bug-iconv13 bug-iconv14
 ifeq ($(have-thread-library),yes)
 tests += bug-iconv3
 endif
@@ -315,6 +315,8 @@ $(objpfx)tst-iconv7.out: $(objpfx)gconv-modules \
 $(objpfx)bug-iconv10.out: $(objpfx)gconv-modules \
 			  $(addprefix $(objpfx),$(modules.so))
 $(objpfx)bug-iconv12.out: $(objpfx)gconv-modules \
+			  $(addprefix $(objpfx),$(modules.so))
+$(objpfx)bug-iconv14.out: $(objpfx)gconv-modules \
 			  $(addprefix $(objpfx),$(modules.so))
 
 $(objpfx)iconv-test.out: run-iconv-test.sh $(objpfx)gconv-modules \

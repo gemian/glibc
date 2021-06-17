@@ -1,5 +1,5 @@
 /* Block a thread.  Mach version.
-   Copyright (C) 2000-2018 Free Software Foundation, Inc.
+   Copyright (C) 2000-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library;  if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <assert.h>
 #include <errno.h>
@@ -24,15 +24,30 @@
 
 #include <pt-internal.h>
 
+#ifndef MSG_OPTIONS
+# define MSG_OPTIONS 0
+#endif
+
+#ifndef RETTYPE
+# define RETTYPE void
+#endif
+
+#ifndef RETURN
+# define RETURN(val)
+#endif
+
 /* Block THREAD.  */
-void
+RETTYPE
 __pthread_block (struct __pthread *thread)
 {
   mach_msg_header_t msg;
   error_t err;
 
-  err = __mach_msg (&msg, MACH_RCV_MSG, 0, sizeof msg,
+  err = __mach_msg (&msg, MACH_RCV_MSG | MSG_OPTIONS, 0, sizeof msg,
 		    thread->wakeupmsg.msgh_remote_port,
 		    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+  if ((MSG_OPTIONS & MACH_RCV_INTERRUPT) && err == MACH_RCV_INTERRUPTED)
+    RETURN(EINTR);
   assert_perror (err);
+  RETURN(0);
 }

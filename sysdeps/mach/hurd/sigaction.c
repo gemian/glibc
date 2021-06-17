@@ -1,4 +1,4 @@
-/* Copyright (C) 1991-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1991-2020 Free Software Foundation, Inc.
 
    This file is part of the GNU C Library.
 
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <errno.h>
 #include <signal.h>
@@ -30,10 +30,10 @@ __sigaction (int sig, const struct sigaction *act, struct sigaction *oact)
   struct sigaction a, old;
   sigset_t pending;
 
-  if (sig <= 0 || sig >= NSIG ||
-      (act != NULL && act->sa_handler != SIG_DFL &&
-       ((__sigmask (sig) & _SIG_CANT_MASK) ||
-	act->sa_handler == SIG_ERR)))
+  if (sig <= 0 || sig >= NSIG
+      || (act != NULL && act->sa_handler != SIG_DFL
+	  && ((__sigmask (sig) & _SIG_CANT_MASK)
+	      || act->sa_handler == SIG_ERR)))
     {
       errno = EINVAL;
       return -1;
@@ -51,8 +51,8 @@ __sigaction (int sig, const struct sigaction *act, struct sigaction *oact)
   if (act != NULL)
     _hurd_sigstate_actions (ss) [sig] = a;
 
-  if (act != NULL && sig == SIGCHLD &&
-      (a.sa_flags & SA_NOCLDSTOP) != (old.sa_flags & SA_NOCLDSTOP))
+  if (act != NULL && sig == SIGCHLD
+      && (a.sa_flags & SA_NOCLDSTOP) != (old.sa_flags & SA_NOCLDSTOP))
     {
       _hurd_sigstate_unlock (ss);
 

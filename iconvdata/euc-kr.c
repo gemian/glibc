@@ -1,5 +1,5 @@
 /* Mapping tables for EUC-KR handling.
-   Copyright (C) 1998-2018 Free Software Foundation, Inc.
+   Copyright (C) 1998-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Jungshik Shin <jshin@pantheon.yale.edu>
    and Ulrich Drepper <drepper@cygnus.com>, 1998.
@@ -16,7 +16,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <dlfcn.h>
 #include <stdint.h>
@@ -80,11 +80,7 @@ euckr_from_ucs4 (uint32_t ch, unsigned char *cp)
 									      \
     if (ch <= 0x9f)							      \
       ++inptr;								      \
-    /* 0xfe(->0x7e : row 94) and 0xc9(->0x59 : row 41) are		      \
-       user-defined areas.  */						      \
-    else if (__builtin_expect (ch == 0xa0, 0)				      \
-	     || __builtin_expect (ch > 0xfe, 0)				      \
-	     || __builtin_expect (ch == 0xc9, 0))			      \
+    else if (__glibc_unlikely (ch == 0xa0))				      \
       {									      \
 	/* This is illegal.  */						      \
 	STANDARD_FROM_LOOP_ERR_HANDLER (1);				      \

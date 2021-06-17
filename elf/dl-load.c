@@ -1,5 +1,5 @@
 /* Map in a shared object's segments from the file.
-   Copyright (C) 1995-2018 Free Software Foundation, Inc.
+   Copyright (C) 1995-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <elf.h>
 #include <errno.h>
@@ -876,33 +876,43 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
   struct r_debug *r = _dl_debug_initialize (0, nsid);
   bool make_consistent = false;
 
-  /* Get file information.  */
+  /* Get file information.  To match the kernel behavior, do not fill
+     in this information for the executable in case of an explicit
+     loader invocation.  */
   struct r_file_id id;
-  if (__glibc_unlikely (!_dl_get_file_id (fd, &id)))
+  if (mode & __RTLD_OPENEXEC)
     {
-      errstring = N_("cannot stat shared object");
-    call_lose_errno:
-      errval = errno;
-    call_lose:
-      lose (errval, fd, name, realname, l, errstring,
-	    make_consistent ? r : NULL, nsid);
+      assert (nsid == LM_ID_BASE);
+      memset (&id, 0, sizeof (id));
     }
+  else
+    {
+      if (__glibc_unlikely (!_dl_get_file_id (fd, &id)))
+	{
+	  errstring = N_("cannot stat shared object");
+	call_lose_errno:
+	  errval = errno;
+	call_lose:
+	  lose (errval, fd, name, realname, l, errstring,
+		make_consistent ? r : NULL, nsid);
+	}
 
-  /* Look again to see if the real name matched another already loaded.  */
-  for (l = GL(dl_ns)[nsid]._ns_loaded; l != NULL; l = l->l_next)
-    if (!l->l_removed && _dl_file_id_match_p (&l->l_file_id, &id))
-      {
-	/* The object is already loaded.
-	   Just bump its reference count and return it.  */
-	__close_nocancel (fd);
+      /* Look again to see if the real name matched another already loaded.  */
+      for (l = GL(dl_ns)[nsid]._ns_loaded; l != NULL; l = l->l_next)
+	if (!l->l_removed && _dl_file_id_match_p (&l->l_file_id, &id))
+	  {
+	    /* The object is already loaded.
+	       Just bump its reference count and return it.  */
+	    __close_nocancel (fd);
 
-	/* If the name is not in the list of names for this object add
-	   it.  */
-	free (realname);
-	add_name_to_object (l, name);
+	    /* If the name is not in the list of names for this object add
+	       it.  */
+	    free (realname);
+	    add_name_to_object (l, name);
 
-	return l;
-      }
+	    return l;
+	  }
+    }
 
 #ifdef SHARED
   /* When loading into a namespace other than the base one we must
@@ -947,21 +957,6 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
   /* This is the ELF header.  We read it in `open_verify'.  */
   header = (void *) fbp->buf;
 
-#ifndef MAP_ANON
-# define MAP_ANON 0
-  if (_dl_zerofd == -1)
-    {
-      _dl_zerofd = _dl_sysdep_open_zero_fill ();
-      if (_dl_zerofd == -1)
-	{
-	  free (realname);
-	  __close_nocancel (fd);
-	  _dl_signal_error (errno, NULL, NULL,
-			    N_("cannot open zero fill device"));
-	}
-    }
-#endif
-
   /* Signal that we are going to add new objects.  */
   if (r->r_state == RT_CONSISTENT)
     {
@@ -978,7 +973,8 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 	      for (unsigned int cnt = 0; cnt < GLRO(dl_naudit); ++cnt)
 		{
 		  if (afct->activity != NULL)
-		    afct->activity (&head->l_audit[cnt].cookie, LA_ACT_ADD);
+		    afct->activity (&link_map_audit_state (head, cnt)->cookie,
+				    LA_ACT_ADD);
 
 		  afct = afct->next;
 		}
@@ -1020,8 +1016,8 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
   else
     {
       phdr = alloca (maplength);
-      __lseek (fd, header->e_phoff, SEEK_SET);
-      if ((size_t) __read_nocancel (fd, (void *) phdr, maplength) != maplength)
+      if ((size_t) __pread64_nocancel (fd, (void *) phdr, maplength,
+				       header->e_phoff) != maplength)
 	{
 	  errstring = N_("cannot read file data");
 	  goto call_lose_errno;
@@ -1123,27 +1119,21 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 	     offset.  We will adjust it later.  */
 	  l->l_tls_initimage = (void *) ph->p_vaddr;
 
-	  /* If not loading the initial set of shared libraries,
-	     check whether we should permit loading a TLS segment.  */
-	  if (__glibc_likely (l->l_type == lt_library)
-	      /* If GL(dl_tls_dtv_slotinfo_list) == NULL, then rtld.c did
-		 not set up TLS data structures, so don't use them now.  */
-	      || __glibc_likely (GL(dl_tls_dtv_slotinfo_list) != NULL))
-	    {
-	      /* Assign the next available module ID.  */
-	      l->l_tls_modid = _dl_next_tls_modid ();
-	      break;
-	    }
+	  /* l->l_tls_modid is assigned below, once there is no
+	     possibility for failure.  */
 
+	  if (l->l_type != lt_library
+	      && GL(dl_tls_dtv_slotinfo_list) == NULL)
+	    {
 #ifdef SHARED
-	  /* We are loading the executable itself when the dynamic
-	     linker was executed directly.  The setup will happen
-	     later.  Otherwise, the TLS data structures are already
-	     initialized, and we assigned a TLS modid above.  */
-	  assert (l->l_prev == NULL || (mode & __RTLD_AUDIT) != 0);
+	      /* We are loading the executable itself when the dynamic
+		 linker was executed directly.  The setup will happen
+		 later.  */
+	      assert (l->l_prev == NULL || (mode & __RTLD_AUDIT) != 0);
 #else
-	  assert (false && "TLS not initialized in static application");
+	      assert (false && "TLS not initialized in static application");
 #endif
+	    }
 	  break;
 
 	case PT_GNU_STACK:
@@ -1173,6 +1163,10 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
 	goto call_lose;
       }
 
+    /* dlopen of an executable is not valid because it is not possible
+       to perform proper relocations, handle static TLS, or run the
+       ELF constructors.  For PIE, the check needs the dynamic
+       section, so there is another check below.  */
     if (__glibc_unlikely (type != ET_DYN)
 	&& __glibc_unlikely ((mode & __RTLD_OPENEXEC) == 0))
       {
@@ -1209,9 +1203,11 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
   elf_get_dynamic_info (l, NULL);
 
   /* Make sure we are not dlopen'ing an object that has the
-     DF_1_NOOPEN flag set.  */
-  if (__glibc_unlikely (l->l_flags_1 & DF_1_NOOPEN)
-      && (mode & __RTLD_DLOPEN))
+     DF_1_NOOPEN flag set, or a PIE object.  */
+  if ((__glibc_unlikely (l->l_flags_1 & DF_1_NOOPEN)
+       && (mode & __RTLD_DLOPEN))
+      || (__glibc_unlikely (l->l_flags_1 & DF_1_PIE)
+	  && __glibc_unlikely ((mode & __RTLD_OPENEXEC) == 0)))
     {
       /* We are not supposed to load this object.  Free all resources.  */
       _dl_unmap_segments (l);
@@ -1222,7 +1218,11 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
       if (l->l_phdr_allocated)
 	free ((void *) l->l_phdr);
 
-      errstring = N_("shared object cannot be dlopen()ed");
+      if (l->l_flags_1 & DF_1_PIE)
+	errstring
+	  = N_("cannot dynamically load position-independent executable");
+      else
+	errstring = N_("shared object cannot be dlopen()ed");
       goto call_lose;
     }
 
@@ -1374,6 +1374,18 @@ cannot enable executable stack as shared object requires");
     add_name_to_object (l, ((const char *) D_PTR (l, l_info[DT_STRTAB])
 			    + l->l_info[DT_SONAME]->d_un.d_val));
 
+  /* _dl_close can only eventually undo the module ID assignment (via
+     remove_slotinfo) if this function returns a pointer to a link
+     map.  Therefore, delay this step until all possibilities for
+     failure have been excluded.  */
+  if (l->l_tls_blocksize > 0
+      && (__glibc_likely (l->l_type == lt_library)
+	  /* If GL(dl_tls_dtv_slotinfo_list) == NULL, then rtld.c did
+	     not set up TLS data structures, so don't use them now.  */
+	  || __glibc_likely (GL(dl_tls_dtv_slotinfo_list) != NULL)))
+    /* Assign the next available module ID.  */
+    l->l_tls_modid = _dl_next_tls_modid ();
+
 #ifdef DL_AFTER_LOAD
   DL_AFTER_LOAD (l);
 #endif
@@ -1391,10 +1403,9 @@ cannot enable executable stack as shared object requires");
 	{
 	  if (afct->objopen != NULL)
 	    {
-	      l->l_audit[cnt].bindflags
-		= afct->objopen (l, nsid, &l->l_audit[cnt].cookie);
-
-	      l->l_audit_any_plt |= l->l_audit[cnt].bindflags != 0;
+	      struct auditstate *state = link_map_audit_state (l, cnt);
+	      state->bindflags = afct->objopen (l, nsid, &state->cookie);
+	      l->l_audit_any_plt |= state->bindflags != 0;
 	    }
 
 	  afct = afct->next;
@@ -1442,209 +1453,6 @@ print_search_path (struct r_search_path_elem **list,
   else
     _dl_debug_printf_c ("\t\t(%s)\n", what);
 }
-
-#ifdef __arm__
-/* Read an unsigned leb128 value from P, store the value in VAL, return
-   P incremented past the value.  We assume that a word is large enough to
-   hold any value so encoded; if it is smaller than a pointer on some target,
-   pointers should not be leb128 encoded on that target.  */
-static unsigned char *
-read_uleb128 (unsigned char *p, unsigned long *val)
-{
-  unsigned int shift = 0;
-  unsigned char byte;
-  unsigned long result;
-
-  result = 0;
-  do
-    {
-      byte = *p++;
-      result |= (byte & 0x7f) << shift;
-      shift += 7;
-    }
-  while (byte & 0x80);
-
-  *val = result;
-  return p;
-}
-
-
-#define ATTR_TAG_FILE          1
-#define ABI_VFP_args          28
-#define VFP_ARGS_IN_VFP_REGS   1
-
-/* Check consistency of ABI in the ARM attributes. Search through the
-   section headers looking for the ARM attributes section, then
-   check the VFP_ARGS attribute. */
-static int
-check_arm_attributes_hfabi(int fd, ElfW(Ehdr) *ehdr, bool *is_hf)
-{
-  unsigned int i;
-  ElfW(Shdr) *shdrs;
-  int sh_size = ehdr->e_shentsize * ehdr->e_shnum;
-
-  /* Load in the section headers so we can look for the attributes
-   * section */
-  shdrs = alloca(sh_size);
-  __lseek (fd, ehdr->e_shoff, SEEK_SET);
-  if ((size_t) __libc_read (fd, (void *) shdrs, sh_size) != sh_size)
-    return -1;
-
-  for (i = 0; i < ehdr->e_shnum; i++)
-    {
-      if (SHT_ARM_ATTRIBUTES == shdrs[i].sh_type)
-        {
-	  /* We've found a likely section. Load the contents and
-	   * check the tags */
-	  unsigned char *contents = alloca(shdrs[i].sh_size);
-	  unsigned char *p = contents;
-	  unsigned char * end;
-
-	  __lseek (fd, shdrs[i].sh_offset, SEEK_SET);
-	  if ((size_t) __libc_read (fd, (void *) contents, shdrs[i].sh_size) != shdrs[i].sh_size)
-	    return -1;
-
-	  /* Sanity-check the attribute section details. Make sure
-	   * that it's the "aeabi" section, that's all we care
-	   * about. */
-	  if (*p == 'A')
-            {
-	      unsigned long len = shdrs[i].sh_size - 1;
-	      unsigned long namelen;
-	      p++;
-
-	      while (len > 0)
-                {
-		  unsigned long section_len = p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24;
-		  if (section_len > len)
-                    {
-		      _dl_debug_printf_c ("    invalid section len %lu, max remaining %lu\n", section_len, len);
-		      section_len = len;
-                    }
-
-		  p += 4;
-		  len -= section_len;
-		  section_len -= 4;
-
-		  if (0 != strcmp((char *)p, "aeabi"))
-                    {
-		      _dl_debug_printf_c ("    ignoring unknown attr section %s\n", p);
-		      p += section_len;
-		      continue;
-                    }
-		  namelen = strlen((char *)p) + 1;
-		  p += namelen;
-		  section_len -= namelen;
-
-		  /* We're in a valid section. Walk through this
-		   * section looking for the tag we care about
-		   * (ABI_VFP_args) */
-		  while (section_len > 0)
-                    {
-		      unsigned long val = 0;
-		      unsigned long tag;
-		      unsigned long size;
-
-		      end = p;
-		      tag = (*p++);
-
-		      size = p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24;
-		      if (size > section_len)
-                        {
-			  _dl_debug_printf_c ("    invalid subsection length %lu, max allowed %lu\n", size, section_len);
-			  size = section_len;
-                        }
-		      p += 4;
-
-		      section_len -= size;
-		      end += size;
-		      if (ATTR_TAG_FILE != tag)
-                        {
-			  /* ignore, we don't care */
-			  _dl_debug_printf_c ("    ignoring unknown subsection with type %lu length %lu\n", tag, size);
-			  p = end;
-			  continue;
-                        }
-		      while (p < end)
-                        {
-			  p = read_uleb128 (p, &tag);
-			  /* Handle the different types of tag. */
-			  if ( (tag == 4) || (tag == 5) || (tag == 67) )
-                            {
-			      /* Special cases for string values */
-			      namelen = strlen((char *)p) + 1;
-			      p += namelen;
-                            }
-			  else
-                            {
-			      p = read_uleb128 (p, &val);
-                            }
-			  if ( (tag == ABI_VFP_args) && (val == VFP_ARGS_IN_VFP_REGS) )
-                            {
-			      *is_hf = 1;
-			      return 0;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-  return 0;
-}
-
-
-/* ARM-specific checks. If we're built using the HF ABI, then fail any
-   attempts to use the SF ABI (and vice versa). Then, check for
-   consistency of ABI in terms of passing VFP args. */
-static int
-arm_specific_checks(int fd, const char *name, ElfW(Ehdr) *ehdr)
-{
-  static int all_hf = -1; /* unset */
-  bool is_hf = false;
-  int ret;
-
-  ret = check_arm_attributes_hfabi(fd, ehdr, &is_hf);
-  if (ret != 0)
-    return ret;
-
-#ifdef __ARM_PCS_VFP
-  if (!is_hf)
-    return EINVAL;
-#else
-  if (is_hf)
-    return EINVAL;
-#endif
-
-  if (all_hf == -1)
-    {
-      if (is_hf)
-	all_hf = 1;
-      else
-	all_hf = 0;
-    }
-  else if (all_hf == 1 && !is_hf)
-    return EINVAL;
-  else if (all_hf == 0 && is_hf)
-    return EINVAL;
-  return 0;
-}
-#endif
-
-
-/* Run any architecture-specific checks that might be needed for the
-   current architecture. */
-static int
-arch_specific_checks(int fd, const char *name, ElfW(Ehdr) *ehdr)
-{
-#ifdef __arm__
-    return arm_specific_checks(fd, name, ehdr);
-#endif
-
-  return 0;
-}
-
 
 /* Open a file and verify it is an ELF file for this architecture.  We
    ignore only ELF files for other architectures.  Non-ELF files and
@@ -1703,8 +1511,8 @@ open_verify (const char *name, int fd,
 	{
 	  if (afct->objsearch != NULL)
 	    {
-	      name = afct->objsearch (name, &loader->l_audit[cnt].cookie,
-				      whatcode);
+	      struct auditstate *state = link_map_audit_state (loader, cnt);
+	      name = afct->objsearch (name, &state->cookie, whatcode);
 	      if (name == NULL)
 		/* Ignore the path.  */
 		return -1;
@@ -1784,15 +1592,15 @@ open_verify (const char *name, int fd,
 	  const Elf32_Word *magp = (const void *) ehdr->e_ident;
 	  if (*magp !=
 #if BYTE_ORDER == LITTLE_ENDIAN
-	      ((ELFMAG0 << (EI_MAG0 * 8)) |
-	       (ELFMAG1 << (EI_MAG1 * 8)) |
-	       (ELFMAG2 << (EI_MAG2 * 8)) |
-	       (ELFMAG3 << (EI_MAG3 * 8)))
+	      ((ELFMAG0 << (EI_MAG0 * 8))
+	       | (ELFMAG1 << (EI_MAG1 * 8))
+	       | (ELFMAG2 << (EI_MAG2 * 8))
+	       | (ELFMAG3 << (EI_MAG3 * 8)))
 #else
-	      ((ELFMAG0 << (EI_MAG3 * 8)) |
-	       (ELFMAG1 << (EI_MAG2 * 8)) |
-	       (ELFMAG2 << (EI_MAG1 * 8)) |
-	       (ELFMAG3 << (EI_MAG0 * 8)))
+	      ((ELFMAG0 << (EI_MAG3 * 8))
+	       | (ELFMAG1 << (EI_MAG2 * 8))
+	       | (ELFMAG2 << (EI_MAG1 * 8))
+	       | (ELFMAG3 << (EI_MAG0 * 8)))
 #endif
 	      )
 	    errstring = N_("invalid ELF header");
@@ -1859,17 +1667,6 @@ open_verify (const char *name, int fd,
 	  errstring = N_("only ET_DYN and ET_EXEC can be loaded");
 	  goto call_lose;
 	}
-      else if (__glibc_unlikely (ehdr->e_type == ET_EXEC
-				 && (mode & __RTLD_OPENEXEC) == 0))
-	{
-	  /* BZ #16634. It is an error to dlopen ET_EXEC (unless
-	     __RTLD_OPENEXEC is explicitly set).  We return error here
-	     so that code in _dl_map_object_from_fd does not try to set
-	     l_tls_modid for this module.  */
-
-	  errstring = N_("cannot dynamically load executable");
-	  goto call_lose;
-	}
       else if (__glibc_unlikely (ehdr->e_phentsize != sizeof (ElfW(Phdr))))
 	{
 	  errstring = N_("ELF file's phentsize not the expected size");
@@ -1882,9 +1679,8 @@ open_verify (const char *name, int fd,
       else
 	{
 	  phdr = alloca (maplength);
-	  __lseek (fd, ehdr->e_phoff, SEEK_SET);
-	  if ((size_t) __read_nocancel (fd, (void *) phdr, maplength)
-	      != maplength)
+	  if ((size_t) __pread64_nocancel (fd, (void *) phdr, maplength,
+					   ehdr->e_phoff) != maplength)
 	    {
 	    read_error:
 	      errval = errno;
@@ -1900,22 +1696,10 @@ open_verify (const char *name, int fd,
 
       /* Check .note.ABI-tag if present.  */
       for (ph = phdr; ph < &phdr[ehdr->e_phnum]; ++ph)
-      {
-	if (ph->p_type == PT_NOTE && ph->p_filesz >= 32 && ph->p_align >= 4)
+	if (ph->p_type == PT_NOTE && ph->p_filesz >= 32
+	    && (ph->p_align == 4 || ph->p_align == 8))
 	  {
 	    ElfW(Addr) size = ph->p_filesz;
-	    /* NB: Some PT_NOTE segment may have alignment value of 0
-	       or 1.  gABI specifies that PT_NOTE segments should be
-	       aligned to 4 bytes in 32-bit objects and to 8 bytes in
-	       64-bit objects.  As a Linux extension, we also support
-	       4 byte alignment in 64-bit objects.  If p_align is less
-	       than 4, we treate alignment as 4 bytes since some note
-	       segments have 0 or 1 byte alignment.   */
-	    ElfW(Addr) align = ph->p_align;
-	    if (align < 4)
-	      align = 4;
-	    else if (align != 4 && align != 8)
-	      continue;
 
 	    if (ph->p_offset + size <= (size_t) fbp->len)
 	      abi_note = (void *) (fbp->buf + ph->p_offset);
@@ -1934,8 +1718,8 @@ open_verify (const char *name, int fd,
 
 		    abi_note = abi_note_malloced;
 		  }
-		__lseek (fd, ph->p_offset, SEEK_SET);
-		if (__read_nocancel (fd, (void *) abi_note, size) != size)
+		if (__pread64_nocancel (fd, (void *) abi_note, size,
+					ph->p_offset) != size)
 		  {
 		    free (abi_note_malloced);
 		    goto read_error;
@@ -1946,7 +1730,7 @@ open_verify (const char *name, int fd,
 	      {
 		ElfW(Addr) note_size
 		  = ELF_NOTE_NEXT_OFFSET (abi_note[0], abi_note[1],
-					  align);
+					  ph->p_align);
 
 		if (size - 32 < note_size)
 		  {
@@ -1974,20 +1758,6 @@ open_verify (const char *name, int fd,
 
 	    break;
 	  }
-      if (-1 != fd)
-	{
-	  int error = arch_specific_checks(fd, name, ehdr);
-	  if (EINVAL == error)
-	    {
-	      goto close_and_out;
-	    }
-	  if (0 != error)
-	    {
-	      errstring = N_("Unable to run arch-specific checks\n");
-	      goto call_lose;
-	    }
-	}
-      }
       free (abi_note_malloced);
     }
 
@@ -2218,8 +1988,8 @@ _dl_map_object (struct link_map *loader, const char *name,
 	  if (afct->objsearch != NULL)
 	    {
 	      const char *before = name;
-	      name = afct->objsearch (name, &loader->l_audit[cnt].cookie,
-				      LA_SER_ORIG);
+	      struct auditstate *state = link_map_audit_state (loader, cnt);
+	      name = afct->objsearch (name, &state->cookie, LA_SER_ORIG);
 	      if (name == NULL)
 		{
 		  /* Do not try anything further.  */

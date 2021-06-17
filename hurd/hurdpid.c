@@ -1,4 +1,4 @@
-/* Copyright (C) 1991-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <hurd.h>
 #include <lowlevellock.h>
@@ -37,13 +37,11 @@ text_set_element (_hurd_proc_subinit, init_pids);
 
 #include <hurd/msg_server.h>
 #include "set-hooks.h"
-#include <cthreads.h>
 
 DEFINE_HOOK (_hurd_pgrp_changed_hook, (pid_t));
 
 /* These let user threads synchronize with an operation which changes ids.  */
 unsigned int _hurd_pids_changed_stamp;
-struct condition _hurd_pids_changed_sync;
 
 kern_return_t
 _S_msg_proc_newids (mach_port_t me,
@@ -68,7 +66,7 @@ _S_msg_proc_newids (mach_port_t me,
 
   /* Notify any waiting user threads that the id change as been completed.  */
   ++_hurd_pids_changed_stamp;
-  lll_wake (&_hurd_pids_changed_stamp, GSYNC_BROADCAST);
+  lll_wake (_hurd_pids_changed_stamp, GSYNC_BROADCAST);
 
   return 0;
 }

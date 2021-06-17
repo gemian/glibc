@@ -1,4 +1,4 @@
-/* Copyright (C) 1997-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1997-2020 Free Software Foundation, Inc.
 
    This file is part of the GNU C Library.
 
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #ifndef _AARCH64_SYSDEP_H
 #define _AARCH64_SYSDEP_H
@@ -45,7 +45,7 @@
 #define ENTRY(name)						\
   .globl C_SYMBOL_NAME(name);					\
   .type C_SYMBOL_NAME(name),%function;				\
-  .align 4;							\
+  .p2align 6;							\
   C_LABEL(name)							\
   cfi_startproc;						\
   CALL_MCOUNT

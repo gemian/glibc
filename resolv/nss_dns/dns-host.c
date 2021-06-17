@@ -1,4 +1,4 @@
-/* Copyright (C) 1996-2018 Free Software Foundation, Inc.
+/* Copyright (C) 1996-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Extended from original form by Ulrich Drepper <drepper@cygnus.com>, 1996.
 
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 /* Parts of this file are plain copies of the file `gethtnamadr.c' from
    the bind package and it has the following copyright.  */
@@ -78,6 +78,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+#include <libc-pointer-arith.h>
 
 #include "nsswitch.h"
 #include <arpa/nameser.h>
@@ -706,9 +707,6 @@ getanswer_r (struct resolv_context *ctx,
       n = -1;
     }
 
-  if (n > 0 && bp[0] == '.')
-    bp[0] = '\0';
-
   if (__glibc_unlikely (n < 0))
     {
       *errnop = errno;
@@ -950,8 +948,18 @@ getanswer_r (struct resolv_context *ctx,
 	      linebuflen -= nn;
 	    }
 
-	  linebuflen -= sizeof (align) - ((u_long) bp % sizeof (align));
-	  bp += sizeof (align) - ((u_long) bp % sizeof (align));
+	  /* Provide sufficient alignment for both address
+	     families.  */
+	  enum { align = 4 };
+	  _Static_assert ((align % __alignof__ (struct in_addr)) == 0,
+			  "struct in_addr alignment");
+	  _Static_assert ((align % __alignof__ (struct in6_addr)) == 0,
+			  "struct in6_addr alignment");
+	  {
+	    char *new_bp = PTR_ALIGN_UP (bp, align);
+	    linebuflen -= new_bp - bp;
+	    bp = new_bp;
+	  }
 
 	  if (__glibc_unlikely (n > linebuflen))
 	    goto too_small;

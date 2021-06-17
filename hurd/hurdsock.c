@@ -1,5 +1,5 @@
 /* _hurd_socket_server - Find the server for a socket domain.
-   Copyright (C) 1991-2018 Free Software Foundation, Inc.
+   Copyright (C) 1991-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <hurd.h>
 #include <sys/socket.h>
@@ -23,7 +23,7 @@
 #include <hurd/paths.h>
 #include <stdio.h>
 #include <_itoa.h>
-#include <cthreads.h>		/* For `struct mutex'.  */
+#include <lock-intern.h>	/* For `struct mutex'.  */
 #include "hurdmalloc.h"		/* XXX */
 
 static struct mutex lock;

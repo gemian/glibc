@@ -1,5 +1,5 @@
 /* Simple transformations functions.
-   Copyright (C) 1997-2018 Free Software Foundation, Inc.
+   Copyright (C) 1997-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
    Contributed by Ulrich Drepper <drepper@cygnus.com>, 1997.
 
@@ -15,7 +15,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <byteswap.h>
 #include <dlfcn.h>
@@ -76,7 +76,7 @@ __attribute ((always_inline))
 internal_ucs4_loop (struct __gconv_step *step,
 		    struct __gconv_step_data *step_data,
 		    const unsigned char **inptrp, const unsigned char *inend,
-		    unsigned char **outptrp, unsigned char *outend,
+		    unsigned char **outptrp, const unsigned char *outend,
 		    size_t *irreversible)
 {
   const unsigned char *inptr = *inptrp;
@@ -120,7 +120,8 @@ internal_ucs4_loop_unaligned (struct __gconv_step *step,
 			      struct __gconv_step_data *step_data,
 			      const unsigned char **inptrp,
 			      const unsigned char *inend,
-			      unsigned char **outptrp, unsigned char *outend,
+			      unsigned char **outptrp,
+			      const unsigned char *outend,
 			      size_t *irreversible)
 {
   const unsigned char *inptr = *inptrp;
@@ -169,7 +170,8 @@ internal_ucs4_loop_single (struct __gconv_step *step,
 			   struct __gconv_step_data *step_data,
 			   const unsigned char **inptrp,
 			   const unsigned char *inend,
-			   unsigned char **outptrp, unsigned char *outend,
+			   unsigned char **outptrp,
+			   const unsigned char *outend,
 			   size_t *irreversible)
 {
   mbstate_t *state = step_data->__statep;
@@ -231,17 +233,15 @@ __attribute ((always_inline))
 ucs4_internal_loop (struct __gconv_step *step,
 		    struct __gconv_step_data *step_data,
 		    const unsigned char **inptrp, const unsigned char *inend,
-		    unsigned char **outptrp, unsigned char *outend,
+		    unsigned char **outptrp, const unsigned char *outend,
 		    size_t *irreversible)
 {
   int flags = step_data->__flags;
   const unsigned char *inptr = *inptrp;
   unsigned char *outptr = *outptrp;
-  size_t n_convert = MIN (inend - inptr, outend - outptr) / 4;
   int result;
-  size_t cnt;
 
-  for (cnt = 0; cnt < n_convert; ++cnt, inptr += 4)
+  for (; inptr + 4 <= inend && outptr + 4 <= outend; inptr += 4)
     {
       uint32_t inval;
 
@@ -298,17 +298,16 @@ ucs4_internal_loop_unaligned (struct __gconv_step *step,
 			      struct __gconv_step_data *step_data,
 			      const unsigned char **inptrp,
 			      const unsigned char *inend,
-			      unsigned char **outptrp, unsigned char *outend,
+			      unsigned char **outptrp,
+			      const unsigned char *outend,
 			      size_t *irreversible)
 {
   int flags = step_data->__flags;
   const unsigned char *inptr = *inptrp;
   unsigned char *outptr = *outptrp;
-  size_t n_convert = MIN (inend - inptr, outend - outptr) / 4;
   int result;
-  size_t cnt;
 
-  for (cnt = 0; cnt < n_convert; ++cnt, inptr += 4)
+  for (; inptr + 4 <= inend && outptr + 4 <= outend; inptr += 4)
     {
       if (__glibc_unlikely (inptr[0] > 0x80))
 	{
@@ -368,7 +367,8 @@ ucs4_internal_loop_single (struct __gconv_step *step,
 			   struct __gconv_step_data *step_data,
 			   const unsigned char **inptrp,
 			   const unsigned char *inend,
-			   unsigned char **outptrp, unsigned char *outend,
+			   unsigned char **outptrp,
+			   const unsigned char *outend,
 			   size_t *irreversible)
 {
   mbstate_t *state = step_data->__statep;
@@ -443,7 +443,7 @@ __attribute ((always_inline))
 internal_ucs4le_loop (struct __gconv_step *step,
 		      struct __gconv_step_data *step_data,
 		      const unsigned char **inptrp, const unsigned char *inend,
-		      unsigned char **outptrp, unsigned char *outend,
+		      unsigned char **outptrp, const unsigned char *outend,
 		      size_t *irreversible)
 {
   const unsigned char *inptr = *inptrp;
@@ -488,7 +488,8 @@ internal_ucs4le_loop_unaligned (struct __gconv_step *step,
 				struct __gconv_step_data *step_data,
 				const unsigned char **inptrp,
 				const unsigned char *inend,
-				unsigned char **outptrp, unsigned char *outend,
+				unsigned char **outptrp,
+				const unsigned char *outend,
 				size_t *irreversible)
 {
   const unsigned char *inptr = *inptrp;
@@ -540,7 +541,8 @@ internal_ucs4le_loop_single (struct __gconv_step *step,
 			     struct __gconv_step_data *step_data,
 			     const unsigned char **inptrp,
 			     const unsigned char *inend,
-			     unsigned char **outptrp, unsigned char *outend,
+			     unsigned char **outptrp,
+			     const unsigned char *outend,
 			     size_t *irreversible)
 {
   mbstate_t *state = step_data->__statep;
@@ -601,17 +603,15 @@ __attribute ((always_inline))
 ucs4le_internal_loop (struct __gconv_step *step,
 		      struct __gconv_step_data *step_data,
 		      const unsigned char **inptrp, const unsigned char *inend,
-		      unsigned char **outptrp, unsigned char *outend,
+		      unsigned char **outptrp, const unsigned char *outend,
 		      size_t *irreversible)
 {
   int flags = step_data->__flags;
   const unsigned char *inptr = *inptrp;
   unsigned char *outptr = *outptrp;
-  size_t n_convert = MIN (inend - inptr, outend - outptr) / 4;
   int result;
-  size_t cnt;
 
-  for (cnt = 0; cnt < n_convert; ++cnt, inptr += 4)
+  for (; inptr + 4 <= inend && outptr + 4 <= outend; inptr += 4)
     {
       uint32_t inval;
 
@@ -671,17 +671,16 @@ ucs4le_internal_loop_unaligned (struct __gconv_step *step,
 				struct __gconv_step_data *step_data,
 				const unsigned char **inptrp,
 				const unsigned char *inend,
-				unsigned char **outptrp, unsigned char *outend,
+				unsigned char **outptrp,
+				const unsigned char *outend,
 				size_t *irreversible)
 {
   int flags = step_data->__flags;
   const unsigned char *inptr = *inptrp;
   unsigned char *outptr = *outptrp;
-  size_t n_convert = MIN (inend - inptr, outend - outptr) / 4;
   int result;
-  size_t cnt;
 
-  for (cnt = 0; cnt < n_convert; ++cnt, inptr += 4)
+  for (; inptr + 4 <= inend && outptr + 4 <= outend; inptr += 4)
     {
       if (__glibc_unlikely (inptr[3] > 0x80))
 	{
@@ -745,7 +744,8 @@ ucs4le_internal_loop_single (struct __gconv_step *step,
 			     struct __gconv_step_data *step_data,
 			     const unsigned char **inptrp,
 			     const unsigned char *inend,
-			     unsigned char **outptrp, unsigned char *outend,
+			     unsigned char **outptrp,
+			     const unsigned char *outend,
 			     size_t *irreversible)
 {
   mbstate_t *state = step_data->__statep;

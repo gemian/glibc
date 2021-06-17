@@ -1,4 +1,4 @@
-# Copyright (C) 1991-2018 Free Software Foundation, Inc.
+# Copyright (C) 1991-2020 Free Software Foundation, Inc.
 # This file is part of the GNU C Library.
 
 # The GNU C Library is free software; you can redistribute it and/or
@@ -13,7 +13,7 @@
 
 # You should have received a copy of the GNU Lesser General Public
 # License along with the GNU C Library; if not, see
-# <http://www.gnu.org/licenses/>.
+# <https://www.gnu.org/licenses/>.
 
 #
 #	Sub-makefile for misc portion of the library.
@@ -36,7 +36,8 @@ headers	:= sys/uio.h bits/uio-ext.h bits/uio_lim.h \
 	   syslog.h sys/syslog.h \
 	   bits/syslog.h bits/syslog-ldbl.h bits/syslog-path.h bits/error.h \
 	   bits/select2.h bits/hwcap.h bits/auxv.h sys/auxv.h \
-	   sys/sysmacros.h bits/sysmacros.h bits/types/struct_iovec.h
+	   sys/sysmacros.h bits/sysmacros.h bits/types/struct_iovec.h \
+	   bits/err-ldbl.h bits/error-ldbl.h
 
 routines := brk sbrk sstk ioctl \
 	    readv writev preadv preadv64 pwritev pwritev64 \
@@ -80,11 +81,13 @@ aux := init-misc
 install-lib := libg.a
 gpl2lgpl := error.c error.h
 
-tests := tst-dirname tst-tsearch tst-fdset tst-efgcvt tst-mntent tst-hsearch \
+tests := tst-dirname tst-tsearch tst-fdset tst-mntent tst-hsearch \
 	 tst-error1 tst-pselect tst-insremque tst-mntent2 bug-hsearch1 \
 	 tst-mntent-blank-corrupt tst-mntent-blank-passno bug18240 \
 	 tst-preadvwritev tst-preadvwritev64 tst-makedev tst-empty \
-	 tst-preadvwritev2 tst-preadvwritev64v2
+	 tst-preadvwritev2 tst-preadvwritev64v2 tst-warn-wide \
+	 tst-ldbl-warn tst-ldbl-error tst-dbl-efgcvt tst-ldbl-efgcvt \
+	 tst-mntent-autofs tst-syscalls
 
 # Tests which need libdl.
 ifeq (yes,$(build-shared))

@@ -1,5 +1,5 @@
 /* hairy bits of Hurd file name lookup
-   Copyright (C) 1992-2018 Free Software Foundation, Inc.
+   Copyright (C) 1992-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <hurd.h>
 #include <hurd/lookup.h>
@@ -121,10 +121,10 @@ __hurd_file_name_lookup_retry (error_t (*use_init_port)
 	    }
 
 	  /* An empty RETRYNAME indicates we have the final port.  */
-	  if (retryname[0] == '\0' &&
+	  if (retryname[0] == '\0'
 	      /* If reauth'd, we must do one more retry on "" to give the new
 		 translator a chance to make a new port for us.  */
-	      doretry == FS_RETRY_NORMAL)
+	      && doretry == FS_RETRY_NORMAL)
 	    {
 	      if (flags & O_NOFOLLOW)
 		{
@@ -178,8 +178,17 @@ __hurd_file_name_lookup_retry (error_t (*use_init_port)
 	      /* We got a successful translation.  Now apply any open-time
 		 action flags we were passed.  */
 
-	      if (!err && (flags & O_TRUNC)) /* Asked to truncate the file.  */
-		err = __file_set_size (*result, 0);
+	      if (!err && (flags & O_TRUNC))
+		{
+		  /* Asked to truncate the file.  */
+		  err = __file_set_size (*result, 0);
+		  if (!err)
+		    {
+		      struct timespec atime = { 0, UTIME_OMIT };
+		      struct timespec mtime = { 0, UTIME_NOW };
+		      __file_utimens (*result, atime, mtime);
+		    }
+		}
 
 	      if (err)
 		__mach_port_deallocate (__mach_task_self (), *result);
@@ -213,11 +222,11 @@ __hurd_file_name_lookup_retry (error_t (*use_init_port)
 		  int save = errno;
 		  errno = 0;
 		  fd = (int) __strtoul_internal (&retryname[3], &end, 10, 0);
-		  if (end == NULL || errno || /* Malformed number.  */
+		  if (end == NULL || errno /* Malformed number.  */
 		      /* Check for excess text after the number.  A slash
 			 is valid; it ends the component.  Anything else
 			 does not name a numeric file descriptor.  */
-		      (*end != '/' && *end != '\0'))
+		      || (*end != '/' && *end != '\0'))
 		    {
 		      errno = save;
 		      err = ENOENT;
@@ -258,10 +267,10 @@ __hurd_file_name_lookup_retry (error_t (*use_init_port)
 	      break;
 
 	    case 'm':
-	      if (retryname[1] == 'a' && retryname[2] == 'c' &&
-		  retryname[3] == 'h' && retryname[4] == 't' &&
-		  retryname[5] == 'y' && retryname[6] == 'p' &&
-		  retryname[7] == 'e')
+	      if (retryname[1] == 'a' && retryname[2] == 'c'
+		  && retryname[3] == 'h' && retryname[4] == 't'
+		  && retryname[5] == 'y' && retryname[6] == 'p'
+		  && retryname[7] == 'e')
 		{
 		  error_t err;
 		  struct host_basic_info hostinfo;
@@ -327,8 +336,8 @@ __hurd_file_name_lookup_retry (error_t (*use_init_port)
 	      break;
 
 	    case 'p':
-	      if (retryname[1] == 'i' && retryname[2] == 'd' &&
-		  (retryname[3] == '/' || retryname[3] == 0))
+	      if (retryname[1] == 'i' && retryname[2] == 'd'
+		  && (retryname[3] == '/' || retryname[3] == 0))
 		{
 		  char *p, buf[1024];  /* XXX */
 		  size_t len;

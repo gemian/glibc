@@ -1,5 +1,5 @@
 /* Resolver state initialization and resolv.conf parsing.
-   Copyright (C) 1995-2018 Free Software Foundation, Inc.
+   Copyright (C) 1995-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library; if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 /*
  * Copyright (c) 1985, 1989, 1993
@@ -672,7 +672,6 @@ res_setoptions (struct resolv_conf_parser *parser, const char *options)
             unsigned long int flag;
           } options[] = {
 #define STRnLEN(str) str, sizeof (str) - 1
-            { STRnLEN ("inet6"), 0, DEPRECATED_RES_USE_INET6 },
             { STRnLEN ("rotate"), 0, RES_ROTATE },
             { STRnLEN ("edns0"), 0, RES_USE_EDNS0 },
             { STRnLEN ("single-request-reopen"), 0, RES_SNGLKUPREOP },
@@ -680,7 +679,8 @@ res_setoptions (struct resolv_conf_parser *parser, const char *options)
             { STRnLEN ("no_tld_query"), 0, RES_NOTLDQUERY },
             { STRnLEN ("no-tld-query"), 0, RES_NOTLDQUERY },
             { STRnLEN ("no-reload"), 0, RES_NORELOAD },
-            { STRnLEN ("use-vc"), 0, RES_USEVC }
+            { STRnLEN ("use-vc"), 0, RES_USEVC },
+            { STRnLEN ("trust-ad"), 0, RES_TRUSTAD },
           };
 #define noptions (sizeof (options) / sizeof (options[0]))
           for (int i = 0; i < noptions; ++i)

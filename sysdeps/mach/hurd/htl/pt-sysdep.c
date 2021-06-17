@@ -1,5 +1,5 @@
 /* System dependent pthreads code.  Hurd version.
-   Copyright (C) 2000-2018 Free Software Foundation, Inc.
+   Copyright (C) 2000-2020 Free Software Foundation, Inc.
    This file is part of the GNU C Library.
 
    The GNU C Library is free software; you can redistribute it and/or
@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU Lesser General Public
    License along with the GNU C Library;  if not, see
-   <http://www.gnu.org/licenses/>.  */
+   <https://www.gnu.org/licenses/>.  */
 
 #include <assert.h>
 #include <stddef.h>
@@ -34,6 +34,13 @@ static void *init_routine (void);
 /* OK, the name of this variable isn't really appropriate, but I don't
    want to change it yet.  */
 void *(*_cthread_init_routine) (void) = &init_routine;
+
+static void
+reset_pthread_total (void)
+{
+  /* Only current thread remains */
+  __pthread_total = 1;
+}
 
 /* This function is called from the Hurd-specific startup code.  It
    should return a new stack pointer for the main thread.  The caller
@@ -77,6 +84,8 @@ _init_routine (void *stack)
      signal thread (which will be created by the glibc startup code
      when we return from here) shouldn't be seen as a user thread.  */
   __pthread_total--;
+
+  __pthread_atfork (NULL, NULL, reset_pthread_total);
 
   /* Make MiG code thread aware.  */
   __mig_init (thread->stackaddr);
